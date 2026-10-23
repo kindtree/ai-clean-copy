@@ -10,7 +10,7 @@
 
 ![platform](https://img.shields.io/badge/platform-macOS-black?logo=apple)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![tests](https://img.shields.io/badge/tests-48%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-67%20passing-brightgreen)
 ![powered by](https://img.shields.io/badge/powered%20by-Hammerspoon-8A2BE2)
 ![CJK](https://img.shields.io/badge/CJK-%E4%B8%80%E7%AD%89%E5%85%AC%E6%B0%91-orange)
 
@@ -88,6 +88,7 @@ cd agent-copy-cjk && ./install.sh
 | 折行的列表项（`- …` / `1. …`），包括 `3. API` 这种被落下的短头 | 每项拼回一行 |
 | 在折行点被拆散的词：`修` ⏎ `改` | `修改`——拼接处绝不多出空格 |
 | 行尾空白 | 清除 |
+| 框线表格（`┌─┬─┐` / `│ a │ b │`）：整张、几行，或从某一行中间开始选的一部分 | CSV，一行一条（含逗号的单元格加引号） |
 
 同样重要的是**绝不碰什么**：代码块（缩进原样）、`ls`/`ps`/表格输出（自动识别列对齐并保护）、shell 提示符，以及一切不像 agent TUI 输出的内容——打分器刻意保守，置信度不够就不动手。
 
@@ -137,7 +138,7 @@ flowchart LR
 
 ```bash
 lua test.lua               # 上游套件（21 个）——零回归
-lua test_deficiencies.lua  # CJK · TUI 杂物 · 重排 · Codex 套件（27 个），基于真实采集
+lua test_deficiencies.lua  # CJK · TUI 杂物 · 重排 · Codex · 表格转 CSV 套件（46 个），基于真实采集
 ```
 
 `tui-fixture-*.txt` 是 Claude Code 和 Codex CLI 的真实屏幕采集；这个 fork 里的每一个修复，最初都是针对其中某个夹具的一条失败测试。

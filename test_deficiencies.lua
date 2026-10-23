@@ -463,6 +463,173 @@ test("codex: bullet + indented real code is NOT merged", function()
 end)
 
 -- ═══════════════════════════════════════════════════════════════
+-- 15. Box-drawn tables paste as CSV (real fixture: Claude Code
+--     v2.1.309, cmux read-screen, 2026-10-23). Any fragment of a
+--     table (whole, a few rows, starting mid-row) becomes CSV; prose
+--     around it is still cleaned; gutter bars and tree output are not
+--     tables.
+-- ═══════════════════════════════════════════════════════════════
+
+local boxTable = {
+  "⏺ ┌────────────────────────────────────────────────────────────────────────────────┬───────┐",
+  "  │                                      建议                                      │ 数量  │",
+  "  ├────────────────────────────────────────────────────────────────────────────────┼───────┤",
+  "  │ 删 Bright Data 相关 skill（其中 bright-data-mcp 还和你的 web-access 规则冲突） │ 12    │",
+  "  ├────────────────────────────────────────────────────────────────────────────────┼───────┤",
+  "  │ 删 copywriting、design-mirror                                                  │ 2     │",
+  "  ├────────────────────────────────────────────────────────────────────────────────┼───────┤",
+  "  │ 清理 sandbox 下的临时截图与缓存文件（放 /tmp 之外的历史产物）                  │ 1,200 │",
+  "  ├────────────────────────────────────────────────────────────────────────────────┼───────┤",
+  "  │ 保留 web-access、codebase-memory 等在用的 skill，不动                          │ 5     │",
+  "  └────────────────────────────────────────────────────────────────────────────────┴───────┘",
+}
+
+test("table: whole table becomes CSV, comma cell quoted", function()
+  eq(clean.process(table.concat(boxTable, "\n")), table.concat({
+    "建议,数量",
+    "删 Bright Data 相关 skill（其中 bright-data-mcp 还和你的 web-access 规则冲突）,12",
+    "删 copywriting、design-mirror,2",
+    "清理 sandbox 下的临时截图与缓存文件（放 /tmp 之外的历史产物）,\"1,200\"",
+    "保留 web-access、codebase-memory 等在用的 skill，不动,5",
+  }, "\n"))
+end)
+
+test("table: two rows with the separator between them", function()
+  eq(clean.process(table.concat({ boxTable[4], boxTable[5], boxTable[6] }, "\n")), table.concat({
+    "删 Bright Data 相关 skill（其中 bright-data-mcp 还和你的 web-access 规则冲突）,12",
+    "删 copywriting、design-mirror,2",
+  }, "\n"))
+end)
+
+test("table: single row", function()
+  eq(clean.process(boxTable[6]), "删 copywriting、design-mirror,2")
+end)
+
+test("table: selection starting mid-row keeps the partial cell", function()
+  local partial = boxTable[4]:gsub("^.-相关 ", "")
+  eq(clean.process(table.concat({ partial, boxTable[5], boxTable[6] }, "\n")), table.concat({
+    "skill（其中 bright-data-mcp 还和你的 web-access 规则冲突）,12",
+    "删 copywriting、design-mirror,2",
+  }, "\n"))
+end)
+
+test("table: partial first row is padded so columns line up", function()
+  local input = table.concat({
+    "b1 │ c1 │",
+    "├────┼────┼────┤",
+    "│ a2 │ b2 │ c2 │",
+  }, "\n")
+  eq(clean.tablesToCsv(input), ",b1,c1\na2,b2,c2")
+end)
+
+test("table: cell wrapped over two lines is joined per column", function()
+  local input = table.concat({
+    "┌──────────────┬──────┐",
+    "│ install the  │ 安装 │",
+    "│ package      │ 依赖 │",
+    "├──────────────┼──────┤",
+    "│ run tests    │ 测试 │",
+    "└──────────────┴──────┘",
+  }, "\n")
+  eq(clean.tablesToCsv(input), "install the package,安装依赖\nrun tests,测试")
+end)
+
+test("table: quotes and commas are escaped", function()
+  eq(clean.tablesToCsv('│ say "hi", ok │ 1 │'), '"say ""hi"", ok",1')
+end)
+
+test("table: prose around the table is still cleaned", function()
+  local input = table.concat({
+    "⏺ 下面是清单：",
+    boxTable[1], boxTable[2], boxTable[3], boxTable[6], boxTable[11],
+    "  以上。",
+  }, "\n")
+  eq(clean.process(input), "下面是清单：\n建议,数量\n删 copywriting、design-mirror,2\n以上。")
+end)
+
+test("table: one gutter bar is not a table", function()
+  local input = "  │ Hello world\n  │ Second line"
+  assert(not clean.process(input):find(",", 1, true), "gutter text must not become CSV")
+end)
+
+test("table: tree output is not a table", function()
+  local input = table.concat({ "src", "│   │   └── clean.lua", "│   └── init.lua", "└── test.lua" }, "\n")
+  eq(clean.tablesToCsv(input), input)
+end)
+
+test("table: record separator alone is not a table border", function()
+  local input = "方案: A\n────────────────────────────────────────\n方案: B"
+  eq(clean.tablesToCsv(input), input)
+end)
+
+-- Regression cases from an independent review (Codex, 2026-10-23).
+
+test("table: a row inside code the scorer leaves alone is not converted", function()
+  local input = "const banner = `\n│ left │ right │\n`;"
+  eq(clean.process(input), input)
+end)
+
+test("table: cut-off first line of a wrapped row keeps its columns", function()
+  local input = table.concat({
+    "b1 │ c1 │",
+    "│ a2 │ b2 │ c2 │",
+    "├────┼────┼────┤",
+    "│ a3 │ b3 │ c3 │",
+  }, "\n")
+  eq(clean.tablesToCsv(input), "a2,b1 b2,c1 c2\na3,b3,c3")
+end)
+
+test("table: a literal │ inside a cell is not a separator", function()
+  local input = table.concat({
+    "┌─────┬───┐",
+    "│ txt │ n │",
+    "├─────┼───┤",
+    "│ a│b │ 1 │",
+    "└─────┴───┘",
+  }, "\n")
+  eq(clean.tablesToCsv(input), "txt,n\na│b,1")
+end)
+
+test("table: a lone tree connector is not a table", function()
+  local input = "src\n│   │   └── clean.lua\n│   └── init.lua\n└──"
+  eq(clean.tablesToCsv(input), input)
+end)
+
+test("table: blank lines and relative indent around a table survive", function()
+  local input = "⏺ Intro.\n\n  ┌───┬───┐\n  │ a │ b │\n  └───┴───┘\n\n    nested text"
+  eq(clean.process(input), "Intro.\n\na,b\n\n  nested text")
+end)
+
+test("table: one-bar fragments at the table edges are padded", function()
+  eq(clean.tablesToCsv("│ a1 │ b1 │ c1 │\n├────┼────┼────┤\n│ a2"), "a1,b1,c1\na2,,")
+  eq(clean.tablesToCsv("c1 │\n├────┼────┼────┤\n│ a2 │ b2 │ c2 │"), ",,c1\na2,b2,c2")
+end)
+
+test("table: padding a very wide cut-off row stays fast", function()
+  local n = 50000
+  local input = "│" .. string.rep(" x │", n) .. "\ny │ z │"
+  local started = os.clock()
+  local out = clean.tablesToCsv(input)
+  local elapsed = os.clock() - started
+  eq(out, string.rep("x,", n - 1) .. "x\n" .. string.rep(",", n - 2) .. "y,z")
+  assert(elapsed < 1, string.format("took %.2fs", elapsed))
+end)
+
+test("table: emoji cells (terminal width 2, counted as 1) still split", function()
+  local input = table.concat({
+    "  ┌──────┬────────┐",
+    "  │ 状态 │ 说明   │",
+    "  ├──────┼────────┤",
+    "  │ ✅   │ 已完成 │",
+    "  ├──────┼────────┤",
+    "  │ 🚀   │ 已上线 │",
+    "  └──────┴────────┘",
+  }, "\n")
+  eq(clean.process(input), "状态,说明\n✅,已完成\n🚀,已上线")
+  eq(clean.tablesToCsv("│ ✅   │ 已完成 │\n├──────┼────────┤\n│ 🚀   │ 已上线 │"), "✅,已完成\n🚀,已上线")
+end)
+
+-- ═══════════════════════════════════════════════════════════════
 -- Results
 -- ═══════════════════════════════════════════════════════════════
 

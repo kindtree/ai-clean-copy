@@ -97,16 +97,9 @@ local function handleTerminalCopy()
   -- dump. Skip cleaning rather than stall Hammerspoon's main thread.
   if #content > 512 * 1024 then return end
   local countAfterCopy = hs.pasteboard.changeCount()
-  local normalized = clean.recoverNumberedBlock(content)
-  local decision = clean.classify(normalized)
-  if decision.mode == "none" then return end
-
-  local cleaned
-  if decision.mode == "full" then
-    cleaned = clean.clean(normalized)
-  else
-    cleaned = clean.stripOnly(normalized)
-  end
+  -- Box-drawn tables become CSV; everything else goes through the
+  -- classify → clean / stripOnly path exactly as before.
+  local cleaned = clean.process(content)
 
   -- Never wipe the clipboard with an empty result (e.g. content that
   -- turned out to be pure TUI chrome).

@@ -1017,6 +1017,402 @@ local function cleanClaudeTUIStripOnly(text)
 end
 
 -- ═══════════════════════════════════════════════════════════════
+-- Box-Drawn Tables → CSV
+--
+-- Claude Code renders markdown tables with box-drawing borders:
+--   ⏺ ┌──────┬──────┐
+--     │ 建议 │ 数量 │
+--     ├──────┼──────┤
+--     │ 删 … │ 12   │
+--     └──────┴──────┘
+-- Pasted raw, the borders and alignment padding fall apart (CJK is
+-- double width) and the gutter rule strips each row's leading │.
+-- Any copied fragment of such a table (one row, a few rows, a
+-- selection starting or ending mid-row) becomes CSV instead. Tables
+-- too wide for the terminal are rendered by Claude as "列名: 内容"
+-- records; those are left to the normal cleaner. Text the scorer
+-- would not touch (code, plain text) is never converted either.
+-- ═══════════════════════════════════════════════════════════════
+
+local BAR = "│"
+local tableJunctions = {
+  "┌", "┐", "└", "┘", "├", "┤", "┬", "┴", "┼", "╭", "╮", "╰", "╯",
+  "╞", "╡", "╪", "╔", "╗", "╚", "╝", "╠", "╣", "╦", "╩", "╬",
+}
+local junctionSet = {}
+for _, j in ipairs(tableJunctions) do junctionSet[j] = true end
+local innerJunctions = { "├", "┤", "┼", "╞", "╡", "╪", "╠", "╣", "╬" }
+local tableRuleChars = { "─", "━", "═", "│", "║", " " }
+
+local function containsAny(s, list)
+  for _, c in ipairs(list) do
+    if s:find(c, 1, true) then return true end
+  end
+  return false
+end
+
+-- Drop the 2-space margin and a response marker sitting in front of
+-- the top border ("⏺ ┌───").
+local function stripTableMargin(line)
+  local s = line:gsub("^%s+", "")
+  for _, marker in ipairs({ "⏺", "●", "•" }) do
+    if s:sub(1, #marker) == marker then
+      s = s:sub(#marker + 1):gsub("^%s+", "")
+      break
+    end
+  end
+  return (s:gsub("%s+$", ""))
+end
+
+-- A border needs a corner or junction: a bare ──── line is Claude's
+-- record separator (or chrome), not part of a table.
+local function isTableBorder(s)
+  if s == "" or not containsAny(s, tableJunctions) then return false end
+  local rest = s
+  for _, c in ipairs(tableJunctions) do rest = rest:gsub(c, "") end
+  for _, c in ipairs(tableRuleChars) do rest = rest:gsub(c, "") end
+  return rest == ""
+end
+
+local function countBars(s)
+  local _, n = s:gsub(BAR, "")
+  return n
+end
+
+local function startsWithBar(s) return s:sub(1, #BAR) == BAR end
+local function endsWithBar(s) return #s >= #BAR and s:sub(-#BAR) == BAR end
+
+-- One gutter bar ("│ text") is quote/tool chrome, not a table row.
+local function isTableRow(s)
+  return countBars(s) >= 2 and (startsWithBar(s) or endsWithBar(s))
+end
+
+-- What is left of a row when the selection starts or ends inside it:
+-- "c1 │" or "│ a2". Only accepted at the edge of a confirmed table.
+local function isRowFragment(s)
+  return countBars(s) == 1 and (startsWithBar(s) or endsWithBar(s)) and not isTableBorder(s)
+end
+
+-- Walk a stripped line, calling fn(char, displayColumn) per character.
+local function eachColumn(s, fn)
+  local col, i = 0, 1
+  while i <= #s do
+    local cp, len = decodeCodepoint(s, i)
+    fn(s:sub(i, i + len - 1), col)
+    col = col + (isWideCp(cp) and 2 or 1)
+    i = i + len
+  end
+end
+
+-- Display columns of the junctions on the block's first border: those
+-- are the only places a row's │ is a cell separator.
+local function borderColumns(block)
+  for _, s in ipairs(block) do
+    if isTableBorder(s) then
+      local cols, n = {}, 0
+      eachColumn(s, function(ch, col)
+        if junctionSet[ch] then
+          cols[col] = true
+          n = n + 1
+        end
+      end)
+      if n >= 2 then return cols, n - 1 end
+    end
+  end
+  return nil, 0
+end
+
+local function barsOnColumns(s, cols)
+  local hits = 0
+  eachColumn(s, function(ch, col)
+    if ch == BAR and cols[col] then hits = hits + 1 end
+  end)
+  return hits
+end
+
+-- A row belongs to the bordered table when it starts with │ and either
+-- its bars sit on the junction columns, or (width drift: displayWidth
+-- counts emoji as 1 column, the terminal as 2) it is closed on both
+-- sides with exactly one bar per junction. `tree` output is neither.
+local function isAlignedRow(s, cols, junctionCount)
+  if not startsWithBar(s) then return false end
+  if barsOnColumns(s, cols) >= 2 then return true end
+  return endsWithBar(s) and countBars(s) == junctionCount
+end
+
+local function isValidTableBlock(block)
+  local cols, width = borderColumns(block)
+  for _, s in ipairs(block) do
+    if isTableRow(s) then
+      if cols then
+        if isAlignedRow(s, cols, width + 1) then return true end
+      elseif startsWithBar(s) and endsWithBar(s) then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+-- Split a row into cells. A full row whose bars all sit on the border's
+-- junction columns is split only there, so a literal │ inside a cell
+-- survives. Otherwise (cut short on the left, or columns drifted by a
+-- wide character) it is split at every bar.
+local function splitRowCells(s, cols, junctionCount)
+  local leading, trailing = startsWithBar(s), endsWithBar(s)
+  local useCols = cols and leading and barsOnColumns(s, cols) == junctionCount
+  local cells, buf = {}, {}
+  eachColumn(s, function(ch, col)
+    if ch == BAR and (not useCols or cols[col]) then
+      cells[#cells + 1] = table.concat(buf)
+      buf = {}
+    else
+      buf[#buf + 1] = ch
+    end
+  end)
+  cells[#cells + 1] = table.concat(buf)
+  if leading then table.remove(cells, 1) end
+  if trailing then table.remove(cells) end
+  for k, c in ipairs(cells) do
+    cells[k] = c:gsub("^%s+", ""):gsub("%s+$", "")
+  end
+  return cells, leading, trailing
+end
+
+-- A selection starting (or ending) mid-row loses the first (or last)
+-- columns: pad on that side so the remaining cells line up. Builds a
+-- new array in one pass (no repeated head inserts).
+local function padCells(cells, leading, trailing, width)
+  local missing = width - #cells
+  if missing <= 0 or (leading and trailing) then return cells end
+  local out = {}
+  if not leading then
+    for _ = 1, missing do out[#out + 1] = "" end
+    for _, c in ipairs(cells) do out[#out + 1] = c end
+  else
+    for _, c in ipairs(cells) do out[#out + 1] = c end
+    for _ = 1, missing do out[#out + 1] = "" end
+  end
+  return out
+end
+
+-- A cell wrapped over several lines: ASCII words get a space back,
+-- CJK text is joined directly.
+local function joinCellFragments(a, b)
+  if a == "" then return b end
+  if b == "" then return a end
+  local l, f = lastCp(a), firstCp(b)
+  if l and f and l < 0x80 and f < 0x80 then return a .. " " .. b end
+  return a .. b
+end
+
+local function csvField(s)
+  if s:find('[,"\n\r]') or s:match("^%s") or s:match("%s$") then
+    return '"' .. s:gsub('"', '""') .. '"'
+  end
+  return s
+end
+
+local function tableBlockToCsv(block)
+  local cols, borderWidth = borderColumns(block)
+
+  -- With row separators (├───┼───┤) every row line between two
+  -- separators belongs to one logical row; without them each line is
+  -- its own row.
+  local grouped = false
+  for _, s in ipairs(block) do
+    if isTableBorder(s) and containsAny(s, innerJunctions) then grouped = true end
+  end
+
+  local lines = {}
+  for _, s in ipairs(block) do
+    if isTableBorder(s) then
+      lines[#lines + 1] = { border = true }
+    else
+      local cells, leading, trailing = splitRowCells(s, cols, borderWidth + 1)
+      lines[#lines + 1] = { cells = cells, leading = leading, trailing = trailing }
+    end
+  end
+
+  local width = borderWidth
+  if width == 0 then
+    for _, l in ipairs(lines) do
+      if l.cells and l.leading and l.trailing then width = math.max(width, #l.cells) end
+    end
+  end
+  if width == 0 then
+    for _, l in ipairs(lines) do
+      if l.cells then width = math.max(width, #l.cells) end
+    end
+  end
+
+  -- Pad every physical line before merging wrapped lines, so a cut-off
+  -- first line cannot shift its text into the wrong column.
+  local rows, current = {}, nil
+  local function flush()
+    if current then rows[#rows + 1] = current end
+    current = nil
+  end
+  for _, l in ipairs(lines) do
+    if l.border then
+      flush()
+    else
+      local cells = padCells(l.cells, l.leading, l.trailing, width)
+      if current and grouped then
+        for k, c in ipairs(cells) do
+          current[k] = joinCellFragments(current[k] or "", c)
+        end
+      else
+        flush()
+        current = cells
+      end
+      if not grouped then flush() end
+    end
+  end
+  flush()
+
+  local out = {}
+  for _, cells in ipairs(rows) do
+    local fields = {}
+    for k, c in ipairs(cells) do fields[k] = csvField(c) end
+    out[#out + 1] = table.concat(fields, ",")
+  end
+  return table.concat(out, "\n")
+end
+
+-- Split text into prose and table segments, in order. A table segment
+-- keeps its raw lines and line range alongside the stripped block.
+local function splitTableSegments(text)
+  local lines = splitLines(text)
+  local stripped = {}
+  for k, l in ipairs(lines) do stripped[k] = stripTableMargin(l) end
+
+  local segments, i = {}, 1
+  local function pushText(k)
+    local last = segments[#segments]
+    if last and last.kind == "text" then
+      last.lines[#last.lines + 1] = lines[k]
+    else
+      segments[#segments + 1] = { kind = "text", lines = { lines[k] } }
+    end
+  end
+
+  while i <= #lines do
+    local s = stripped[i]
+    if isTableBorder(s) or isTableRow(s) then
+      local j = i
+      while j < #lines and (isTableBorder(stripped[j + 1]) or isTableRow(stripped[j + 1])) do
+        j = j + 1
+      end
+      local block = {}
+      for k = i, j do block[#block + 1] = stripped[k] end
+      if isValidTableBlock(block) then
+        local first, last = i, j
+        -- Pull in a one-bar fragment right before or after the table.
+        local prev = segments[#segments]
+        if first > 1 and isRowFragment(stripped[first - 1]) and endsWithBar(stripped[first - 1])
+            and prev and prev.kind == "text" and prev.lines[#prev.lines] == lines[first - 1] then
+          table.remove(prev.lines)
+          if #prev.lines == 0 then table.remove(segments) end
+          first = first - 1
+          table.insert(block, 1, stripped[first])
+        end
+        if last < #lines and isRowFragment(stripped[last + 1]) and startsWithBar(stripped[last + 1]) then
+          last = last + 1
+          block[#block + 1] = stripped[last]
+        end
+        local raw = {}
+        for k = first, last do raw[#raw + 1] = lines[k] end
+        segments[#segments + 1] = { kind = "table", block = block, raw = raw }
+        i = last + 1
+      else
+        for k = i, j do pushText(k) end
+        i = j + 1
+      end
+    else
+      pushText(i)
+      i = i + 1
+    end
+  end
+  return segments
+end
+
+local function convertTables(segments)
+  local out = {}
+  for _, seg in ipairs(segments) do
+    out[#out + 1] = seg.kind == "table" and tableBlockToCsv(seg.block) or table.concat(seg.lines, "\n")
+  end
+  return table.concat(out, "\n")
+end
+
+local PLACEHOLDER = "---agent-copy-cjk-table-%d---"
+
+-- The table's margin, or its ⏺ marker when the table opens the
+-- response. Markers are compared as strings: a Lua character class
+-- like [⏺●•] matches single bytes and would cut a UTF-8 sequence.
+local function placeholderPrefix(raw)
+  local indent = raw:match("^%s*")
+  local rest = raw:sub(#indent + 1)
+  for _, marker in ipairs({ "⏺", "●", "•" }) do
+    if rest:sub(1, #marker) == marker then return indent .. marker .. " " end
+  end
+  return indent
+end
+
+-- The pipeline claude-copy.lua runs on every terminal ⌘C. Returns the
+-- text unchanged when there is nothing to clean.
+local function processClipboard(text)
+  local normalized = recoverFlattenedNumberedBlock(text)
+  local decision = classifyClaudeClipboard(normalized)
+  -- Same gate as before: text the scorer would not touch (code, plain
+  -- text) stays byte-for-byte, tables in it included.
+  if decision.mode == "none" then return text end
+
+  local segments = splitTableSegments(text)
+  local hasTable = false
+  for _, seg in ipairs(segments) do
+    if seg.kind == "table" then hasTable = true end
+  end
+  if not hasTable then
+    if decision.mode == "full" then return cleanClaudeTUI(normalized) end
+    return cleanClaudeTUIStripOnly(normalized)
+  end
+
+  -- Clean the whole text in one pass with each table replaced by a
+  -- placeholder line, so blank lines and relative indentation around
+  -- the tables come out exactly as without them. The placeholder keeps
+  -- the table's margin (or ⏺ marker) and is a structural "---" line,
+  -- which the cleaner never reflows.
+  local lines, csv = {}, {}
+  for _, seg in ipairs(segments) do
+    if seg.kind == "table" then
+      csv[#csv + 1] = tableBlockToCsv(seg.block)
+      lines[#lines + 1] = placeholderPrefix(seg.raw[1]) .. PLACEHOLDER:format(#csv)
+    else
+      for _, l in ipairs(seg.lines) do lines[#lines + 1] = l end
+    end
+  end
+  local withPlaceholders = recoverFlattenedNumberedBlock(table.concat(lines, "\n"))
+  local cleaned = decision.mode == "full" and cleanClaudeTUI(withPlaceholders)
+    or cleanClaudeTUIStripOnly(withPlaceholders)
+
+  local out, found = {}, 0
+  for _, l in ipairs(splitLines(cleaned)) do
+    local k = l:match("%-%-%-agent%-copy%-cjk%-table%-(%d+)%-%-%-")
+    if k and csv[tonumber(k)] then
+      out[#out + 1] = csv[tonumber(k)]
+      found = found + 1
+    else
+      out[#out + 1] = l
+    end
+  end
+  -- Should never happen; if the cleaner ever mangles a placeholder,
+  -- still deliver the tables rather than losing them.
+  if found ~= #csv then return convertTables(segments) end
+  return table.concat(out, "\n")
+end
+
+-- ═══════════════════════════════════════════════════════════════
 -- Public API
 -- ═══════════════════════════════════════════════════════════════
 
@@ -1024,5 +1420,8 @@ M.classify = classifyClaudeClipboard
 M.clean = cleanClaudeTUI
 M.stripOnly = cleanClaudeTUIStripOnly
 M.recoverNumberedBlock = recoverFlattenedNumberedBlock
+-- Table conversion alone, without the scorer gate or prose cleaning.
+M.tablesToCsv = function(text) return convertTables(splitTableSegments(text)) end
+M.process = processClipboard
 
 return M
