@@ -1,6 +1,6 @@
 <div align="center">
 
-# agent-copy-cjk
+# ai-clean-copy
 
 [English](README.md) · **简体中文**
 
@@ -22,10 +22,10 @@
 
 在 agent 终端界面里选中文字按 `⌘C`，剪贴板里全是渲染垃圾：每行开头 2 格边距、`⏺` `❯` `⎿`（Claude Code）或 `•` `›`（Codex）标记、`✻ Worked for 11s` 状态行，还有按终端宽度硬折断的段落——粘到哪里都是碎的。
 
-**agent-copy-cjk** 是一个极小的 [Hammerspoon](https://www.hammerspoon.org/) 拦截器：捕获终端里的 `⌘C`，先给复制内容打分判断是不是 agent TUI 输出，再**在你粘贴之前**分级清理。策略刻意保守——代码、表格、以及一切不像 agent 输出的内容原样放行。
+**ai-clean-copy** 是一个极小的 [Hammerspoon](https://www.hammerspoon.org/) 拦截器：捕获终端里的 `⌘C`，先给复制内容打分判断是不是 agent TUI 输出，再**在你粘贴之前**分级清理。策略刻意保守——代码、表格、以及一切不像 agent 输出的内容原样放行。
 
 <div align="center">
-<img src="assets/social-cn.svg" alt="直接复制 vs 装了 agent-copy-cjk：终端回复粘出来带边距、● ✻ 怪符号、句子被拆断「修改」变「修 改」，对比顶格干净、句子完整的一段。" width="100%">
+<img src="assets/social-cn.svg" alt="直接复制 vs 装了 ai-clean-copy：终端回复粘出来带边距、● ✻ 怪符号、句子被拆断「修改」变「修 改」，对比顶格干净、句子完整的一段。" width="100%">
 </div>
 
 一段代码风格的 before/after：
@@ -51,8 +51,8 @@ Codex 有自己的一套垃圾——`•` 回复标记、`›` 输入回显、�
 ## 30 秒安装
 
 ```bash
-git clone https://github.com/kindtree/agent-copy-cjk.git
-cd agent-copy-cjk && ./install.sh
+git clone https://github.com/kindtree/ai-clean-copy.git
+cd ai-clean-copy && ./install.sh
 ```
 
 脚本会自动装 [Hammerspoon](https://www.hammerspoon.org/)（如果没有）、把两个 Lua 文件放进 `~/.hammerspoon/` 并接入配置。授一次辅助功能权限、重载配置就完事——没有界面，之后每次 `⌘C` 自动生效。
@@ -62,9 +62,9 @@ cd agent-copy-cjk && ./install.sh
 已经在用 Claude Code / Codex？把下面这段 prompt 原样发给它，全程自动搞定：
 
 ```text
-在这台 Mac 上帮我装好 agent-copy-cjk：
+在这台 Mac 上帮我装好 ai-clean-copy：
 
-1. 把 https://github.com/kindtree/agent-copy-cjk.git 克隆到 ~/Code/agent-copy-cjk。
+1. 把 https://github.com/kindtree/ai-clean-copy.git 克隆到 ~/Code/ai-clean-copy。
 2. 在仓库根目录运行 ./install.sh。它会在缺少 Hammerspoon 时用 Homebrew 安装、
    把 init.lua 复制为 ~/.hammerspoon/claude-copy.lua、clean.lua 复制为
    ~/.hammerspoon/clean.lua，并向 ~/.hammerspoon/init.lua 追加一行 dofile。

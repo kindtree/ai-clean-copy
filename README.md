@@ -1,6 +1,6 @@
 <div align="center">
 
-# agent-copy-cjk
+# ai-clean-copy
 
 **English** · [简体中文](README.zh-CN.md)
 
@@ -22,10 +22,10 @@ The clipboard cleaner that understands CJK — 中文 / 日本語 / 한국어 wr
 
 Select text in an agent TUI, hit `⌘C`, and your clipboard fills with rendering junk: 2-space margins on every line, `⏺` `❯` `⎿` (Claude Code) or `•` `›` (Codex) markers, `✻ Worked for 11s` spinner lines, and hard line breaks at the terminal width that shred your paragraphs.
 
-**agent-copy-cjk** is a tiny [Hammerspoon](https://www.hammerspoon.org/) interceptor that catches `⌘C` in your terminal, scores how agent-TUI-like the copied text is, and cleans it *before you paste* — conservatively, so code, tables, and everything non-agent pass through untouched.
+**ai-clean-copy** is a tiny [Hammerspoon](https://www.hammerspoon.org/) interceptor that catches `⌘C` in your terminal, scores how agent-TUI-like the copied text is, and cleans it *before you paste* — conservatively, so code, tables, and everything non-agent pass through untouched.
 
 <div align="center">
-<img src="assets/social-en.svg" alt="Plain copy vs agent-copy-cjk: a terminal reply pasted with margins, stray ●/✻ symbols and a paragraph chopped into broken lines, versus one clean flush-left paragraph." width="100%">
+<img src="assets/social-en.svg" alt="Plain copy vs ai-clean-copy: a terminal reply pasted with margins, stray ●/✻ symbols and a paragraph chopped into broken lines, versus one clean flush-left paragraph." width="100%">
 </div>
 
 The junk above is plain English — margins, stray markers, a paragraph shredded across lines. CJK gets a whole extra failure mode on top (see [below](#why-cjk-needs-its-own-fork)); a CJK before/after:
@@ -51,8 +51,8 @@ Codex renders its own junk — `•` response bullets, `›` prompt echoes, hang
 ## Install in 30 seconds
 
 ```bash
-git clone https://github.com/kindtree/agent-copy-cjk.git
-cd agent-copy-cjk && ./install.sh
+git clone https://github.com/kindtree/ai-clean-copy.git
+cd ai-clean-copy && ./install.sh
 ```
 
 The script installs [Hammerspoon](https://www.hammerspoon.org/) if missing, drops two Lua files into `~/.hammerspoon/`, and wires them into your config. Grant Accessibility permission once, reload, done — there is no UI, it just works on every `⌘C`.
@@ -62,9 +62,9 @@ The script installs [Hammerspoon](https://www.hammerspoon.org/) if missing, drop
 Already inside Claude Code / Codex? Paste this prompt and it handles everything:
 
 ```text
-Set up agent-copy-cjk on this Mac:
+Set up ai-clean-copy on this Mac:
 
-1. Clone https://github.com/kindtree/agent-copy-cjk.git to ~/Code/agent-copy-cjk.
+1. Clone https://github.com/kindtree/ai-clean-copy.git to ~/Code/ai-clean-copy.
 2. Run ./install.sh from the repo root. It installs Hammerspoon via Homebrew if
    missing, copies init.lua to ~/.hammerspoon/claude-copy.lua and clean.lua to
    ~/.hammerspoon/clean.lua, and appends one dofile line to ~/.hammerspoon/init.lua.

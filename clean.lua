@@ -1345,7 +1345,9 @@ local function convertTables(segments)
   return table.concat(out, "\n")
 end
 
-local PLACEHOLDER = "---agent-copy-cjk-table-%d---"
+local PLACEHOLDER = "---ai-clean-copy-table-%d---"
+-- The same marker as a Lua pattern that captures the table number.
+local PLACEHOLDER_PATTERN = (PLACEHOLDER:gsub("%-", "%%-"):gsub("%%d", "(%%d+)"))
 
 -- The table's margin, or its ⏺ marker when the table opens the
 -- response. Markers are compared as strings: a Lua character class
@@ -1398,7 +1400,7 @@ local function processClipboard(text)
 
   local out, found = {}, 0
   for _, l in ipairs(splitLines(cleaned)) do
-    local k = l:match("%-%-%-agent%-copy%-cjk%-table%-(%d+)%-%-%-")
+    local k = l:match(PLACEHOLDER_PATTERN)
     if k and csv[tonumber(k)] then
       out[#out + 1] = csv[tonumber(k)]
       found = found + 1

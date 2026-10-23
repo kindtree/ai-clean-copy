@@ -1,5 +1,5 @@
--- agent-copy-cjk: Auto-clean Claude Code / Codex CLI clipboard artifacts
--- https://github.com/kindtree/agent-copy-cjk
+-- ai-clean-copy: Auto-clean Claude Code / Codex CLI clipboard artifacts
+-- https://github.com/kindtree/ai-clean-copy
 -- Fork of: https://github.com/andersmyrmel/claude-copy
 --
 -- Intercepts Cmd+C in terminal apps, performs the real copy,

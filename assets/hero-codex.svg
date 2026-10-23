@@ -37,7 +37,7 @@
   <circle cx="654" cy="29" r="6" fill="#ff5f57"/>
   <circle cx="674" cy="29" r="6" fill="#febc2e"/>
   <circle cx="694" cy="29" r="6" fill="#28c840"/>
-  <text x="910" y="34" text-anchor="middle" font-size="13" fill="#8b949e">⌘C with agent-copy-cjk → paste</text>
+  <text x="910" y="34" text-anchor="middle" font-size="13" fill="#8b949e">⌘C with ai-clean-copy → paste</text>
 
   <g font-size="15" fill="#e6edf3">
     <text x="654" y="86">剪贴板工具能自动保存复制过的文字、图片</text>

@@ -26,14 +26,14 @@
 
   <!-- ═══ 中间箭头 ═══ -->
   <text x="620" y="380" text-anchor="middle" font-size="52" fill="#2f81f7">➜</text>
-  <text x="620" y="426" text-anchor="middle" font-size="19" font-weight="700" fill="#2f81f7">agent-copy-cjk</text>
+  <text x="620" y="426" text-anchor="middle" font-size="19" font-weight="700" fill="#2f81f7">ai-clean-copy</text>
   <text x="620" y="452" text-anchor="middle" font-size="16" fill="#8a94a0">复制时自动清理</text>
 
   <!-- ═══ 右卡片：装了工具（干净）═══ -->
   <rect x="695" y="150" width="490" height="470" rx="18" fill="#ffffff" stroke="#2da44e" stroke-width="2.5"/>
   <rect x="695" y="150" width="490" height="58" rx="18" fill="#e9f7ee"/>
   <rect x="695" y="180" width="490" height="28" fill="#e9f7ee"/>
-  <text x="722" y="188" font-size="25" font-weight="700" fill="#1a7f37">✓　装了 agent-copy-cjk</text>
+  <text x="722" y="188" font-size="25" font-weight="700" fill="#1a7f37">✓　装了 ai-clean-copy</text>
 
   <g font-size="24" fill="#2b3038" font-family="'SF Mono','PingFang SC',monospace">
     <text x="720" y="278">这个方案的关键在于我们可以</text>
