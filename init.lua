@@ -5,7 +5,7 @@
 -- Intercepts Cmd+C in terminal apps, performs the real copy,
 -- then conditionally cleans Claude TUI artifacts in the copied text.
 
-local VERSION = "2026-10-27"
+local VERSION = "2026-10-27b"
 
 local scriptDir = debug.getinfo(1, "S").source:match("@(.*/)")
 local clean = dofile(scriptDir .. "clean.lua")
@@ -36,6 +36,11 @@ local terminalApps = {
 local config = {
   copyTimeoutMs = 350,
   copyPollIntervalMs = 10,
+  -- Claude Code's fullscreen TUI answers ⌘C by copying its selection
+  -- again, ~0.5s later: after copyTimeoutMs, and often after the user
+  -- has switched to the app they paste into. Clipboard writes landing
+  -- this soon after a terminal ⌘C still count as terminal copies.
+  lateCopyWindowMs = 1500,
 }
 
 -- ═══════════════════════════════════════════════════════════════
@@ -46,6 +51,14 @@ local function isTerminalFocused()
   local app = hs.application.frontmostApplication()
   if not app then return false end
   return terminalApps[app:name()] == true
+end
+
+-- hs.timer.absoluteTime() (ns) after which a write no longer counts
+-- as the late answer to a terminal ⌘C.
+local lateCopyDeadline = 0
+
+local function isTerminalCopy()
+  return isTerminalFocused() or hs.timer.absoluteTime() < lateCopyDeadline
 end
 
 local copyInterceptor
@@ -121,6 +134,7 @@ copyInterceptor = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, function(
   if not isTerminalFocused() then return false end
 
   copyInProgress = true
+  lateCopyDeadline = hs.timer.absoluteTime() + config.lateCopyWindowMs * 1000000
   hs.timer.doAfter(0, function()
     local ok, err = pcall(handleTerminalCopy)
     if not ok then
@@ -139,15 +153,17 @@ copyInterceptor:start()
 -- ═══════════════════════════════════════════════════════════════
 -- Claude Code's fullscreen TUI handles mouse selection itself and,
 -- with copyOnSelect (on by default), writes the clipboard the moment
--- the mouse is released. No ⌘C is involved — and a ⌘C pressed after
--- that changes nothing, so the interceptor above comes back empty.
--- Clean any clipboard write that lands while a terminal is in front.
--- Our own setContents comes back through here as well; process() is
--- a no-op on text it already cleaned, so nothing is written twice.
--- A global, not a local: an unreferenced watcher gets garbage
--- collected and silently stops.
+-- the mouse is released. No ⌘C is involved. A ⌘C pressed after that
+-- makes it copy the selection again (twice: natively and via OSC 52),
+-- ~0.5s later, so the interceptor above comes back empty and the raw
+-- text lands over the cleaned one — see config.lateCopyWindowMs.
+-- Clean any clipboard write that lands while a terminal is in front
+-- or in that window. Our own setContents comes back through here as
+-- well; process() is a no-op on text it already cleaned, so nothing
+-- is written twice. A global, not a local: an unreferenced watcher
+-- gets garbage collected and silently stops.
 ClaudeCopyPasteboardWatcher = hs.pasteboard.watcher.new(function(content)
-  if copyInProgress or not isTerminalFocused() then return end
+  if copyInProgress or not isTerminalCopy() then return end
   local ok, err = pcall(cleanClipboard, content)
   if not ok then
     hs.printf("claude-copy: copy-on-select cleaner failed: %s", tostring(err))
