@@ -699,6 +699,67 @@ test("table: a lone copied row without any border stays as it was", function()
   eq(clean.process(partialTable[4]), partialTable[4])
 end)
 
+-- Real capture from `cmux read-screen`, 2026-10-27 (Claude Code
+-- 2.1.311): two code blocks holding box diagrams, then a table. Code
+-- block lines sit on the same 2-space margin as prose.
+test("table: box diagrams copied with margins keep their lines", function()
+  local input = table.concat({
+    "⏺ 架构如下：",
+    "",
+    "  ┌─────────┐     ┌─────────┐",
+    "  │ Client  │ ──► │ Server  │",
+    "  └─────────┘     └─────────┘",
+    "",
+    "  流程：",
+    "",
+    "  ┌───┬───┐",
+    "  │ A │ B │",
+    "  └─┬─┴─┬─┘",
+    "    ▼   ▼",
+    "",
+    "  ┌──────┬──────┐",
+    "  │ 名称 │ 数量 │",
+    "  ├──────┼──────┤",
+    "  │ 甲   │ 1    │",
+    "  └──────┴──────┘",
+  }, "\n")
+  eq(clean.process(input), table.concat({
+    "架构如下：",
+    "",
+    "┌─────────┐     ┌─────────┐",
+    "│ Client  │ ──► │ Server  │",
+    "└─────────┘     └─────────┘",
+    "",
+    "流程：",
+    "",
+    "┌───┬───┐",
+    "│ A │ B │",
+    "└─┬─┴─┬─┘",
+    "  ▼   ▼",
+    "",
+    "名称,数量",
+    "甲,1",
+  }, "\n"))
+  local box = "⏺ 入口：\n\n  ┌──────────┐\n  │  Client  │\n  │  (app)   │\n  └──────────┘"
+  eq(clean.process(box), "入口：\n\n┌──────────┐\n│  Client  │\n│  (app)   │\n└──────────┘")
+end)
+
+test("table: selection edges and neighbours around tables and diagrams", function()
+  -- Selection starting inside the margin: the first line has only part of it.
+  eq(clean.process(" ┌────┐\n  │ X  │\n  └────┘"), "┌────┐\n│ X  │\n└────┘")
+  -- No space after the marker: no byte of ┌ may be cut.
+  eq(clean.process("⏺┌────┐\n  │ X  │\n  └────┘"), "┌────┐\n│ X  │\n└────┘")
+  -- A tab in the shared margin goes, like the cleaner's dedent.
+  eq(clean.process("⏺ 架构：\n\n  \t┌────┐\n  \t│ X  │\n  \t└────┘\n  \t  ▼"),
+    "架构：\n\n┌────┐\n│ X  │\n└────┘\n  ▼")
+  -- Selection ending inside the bottom border, with and without margins.
+  eq(clean.process("⏺ ┌───┬───┐\n  │ a │ b │\n  ├───┼───┤\n  │ 1 │ 2 │\n  └───┴"), "a,b\n1,2")
+  eq(clean.process("│ 1 │ 2 │\n├───┼───┤\n│ 3 │ 4 │\n└───┴"), "1,2\n3,4")
+  -- Two tables of different widths with no blank line between them.
+  eq(clean.process("⏺ ┌───┬───┐\n  │ a │ b │\n  └───┴───┘\n  ┌────┬────┐\n  │ aa │ bb │\n  └────┴────┘"),
+    "a,b\naa,bb")
+end)
+
 test("table: diagrams and other tools' tables in plain text stay as they are", function()
   for _, s in ipairs({
     -- box diagrams

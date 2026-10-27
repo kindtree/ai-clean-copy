@@ -1348,12 +1348,66 @@ local function isLightBorder(s)
   return rest == ""
 end
 
-local function junctionSignature(s)
-  local cols = {}
+-- Junction columns of a border line, and its display width.
+local function borderJunctions(s)
+  local cols, width = {}, 0
   eachColumn(s, function(ch, col)
     if junctionSet[ch] then cols[#cols + 1] = col end
+    width = col + 1
   end)
-  return table.concat(cols, ",")
+  return cols, width
+end
+
+-- Every border must sit on the junction columns of the widest one. The
+-- selection may cut the block's first line short on the left, or its
+-- last line on the right ("└───┴"): those only have to agree as far as
+-- they go. Returns false, or true and the column count.
+local function bordersAgree(block)
+  local ref, refWidth
+  for _, s in ipairs(block) do
+    if isTableBorder(s) then
+      local cols, width = borderJunctions(s)
+      if not refWidth or width > refWidth then ref, refWidth = cols, width end
+    end
+  end
+  if not ref then return true, 0 end
+  local onRef = {}
+  for _, c in ipairs(ref) do onRef[c] = true end
+  for k, s in ipairs(block) do
+    if isTableBorder(s) then
+      local cols, width = borderJunctions(s)
+      local shift = 0
+      if width == refWidth then
+        if #cols ~= #ref then return false end
+      elseif k == 1 then
+        shift = refWidth - width
+      elseif k ~= #block then
+        return false
+      end
+      for _, c in ipairs(cols) do
+        if not onRef[c + shift] then return false end
+      end
+    end
+  end
+  return true, #ref - 1
+end
+
+-- Even with the scorer's say-so, a block is only a table when its
+-- borders are: unbroken light lines on the same junction columns, at
+-- least two columns. Box diagrams in a code block (┌──┐  ┌──┐, a single
+-- box, └─┬─┴─┬─┘ branching off) go to the text cleaner instead. A few
+-- copied rows without any border are taken as they are.
+local function hasTableBorders(block)
+  local any = false
+  for _, s in ipairs(block) do
+    if isTableBorder(s) then
+      if not isLightBorder(s) then return false end
+      any = true
+    end
+  end
+  if not any then return true end
+  local agree, width = bordersAgree(block)
+  return agree and width >= 2
 end
 
 -- Box-drawing characters (U+2500–U+257F) other than the plain │.
@@ -1364,13 +1418,11 @@ end
 local function isClaudeTable(block, before, after)
   if hasOtherBoxChars(before) or hasOtherBoxChars(after) then return false end
   local cols, width = borderColumns(block)
-  if not cols or width < 2 then return false end
-  local signature
+  if not cols or width < 2 or not bordersAgree(block) then return false end
   local separators, sectionLines, multiLine = 0, 0, false
   for k, s in ipairs(block) do
     if isTableBorder(s) then
-      signature = signature or junctionSignature(s)
-      if not isLightBorder(s) or junctionSignature(s) ~= signature then return false end
+      if not isLightBorder(s) then return false end
       if (s:sub(1, #"┌") == "┌" and k > 1) or (s:sub(1, #"└") == "└" and k < #block) then
         return false
       end
@@ -1412,8 +1464,11 @@ local function splitTableSegments(text)
   while i <= #lines do
     local s = stripped[i]
     if isTableBorder(s) or isTableRow(s) then
+      -- A closed bottom border followed by a new top border is where
+      -- one table ends and the next begins.
       local j = i
-      while j < #lines and (isTableBorder(stripped[j + 1]) or isTableRow(stripped[j + 1])) do
+      while j < #lines and (isTableBorder(stripped[j + 1]) or isTableRow(stripped[j + 1]))
+          and not (stripped[j]:sub(1, #"└") == "└" and stripped[j + 1]:sub(1, #"┌") == "┌") do
         j = j + 1
       end
       local block = {}
@@ -1458,7 +1513,8 @@ end
 local function convertTables(segments)
   local out = {}
   for _, seg in ipairs(segments) do
-    out[#out + 1] = seg.kind == "table" and tableBlockToCsv(seg.block) or table.concat(seg.lines, "\n")
+    out[#out + 1] = seg.kind == "table" and tableBlockToCsv(seg.block)
+      or table.concat(seg.lines or seg.raw, "\n")
   end
   return table.concat(out, "\n")
 end
@@ -1477,6 +1533,42 @@ local function placeholderPrefix(raw)
     if rest:sub(1, #marker) == marker then return indent .. marker .. " " end
   end
   return indent
+end
+
+-- A box diagram goes back exactly as drawn, minus the margin: the
+-- leading whitespace the lines after the first share. A ⏺ marker in
+-- front of the first line stands in for the margin; a selection that
+-- starts inside the margin leaves the first line only part of it.
+local function dedentBlock(raw)
+  local lines = {}
+  for k, l in ipairs(raw) do lines[k] = (l:gsub("%s+$", "")) end
+  local indent, rest = lines[1]:match("^(%s*)(.*)$")
+  for _, marker in ipairs({ "⏺", "●", "•" }) do
+    if rest:sub(1, #marker) == marker then
+      lines[1] = indent .. "  " .. (rest:sub(#marker + 1):gsub("^ ", "", 1))
+      break
+    end
+  end
+  local margin
+  for k = 2, #lines do
+    if lines[k] ~= "" then
+      local lead = lines[k]:match("^[ \t]*")
+      local n = 0
+      if margin then
+        while n < #margin and margin:sub(n + 1, n + 1) == lead:sub(n + 1, n + 1) do n = n + 1 end
+      end
+      margin = margin and margin:sub(1, n) or lead
+    end
+  end
+  margin = margin or lines[1]:match("^[ \t]*")
+  for k, l in ipairs(lines) do
+    if l:sub(1, #margin) == margin then
+      lines[k] = l:sub(#margin + 1)
+    elseif k == 1 then
+      lines[k] = (l:gsub("^[ \t]*", ""))
+    end
+  end
+  return table.concat(lines, "\n")
 end
 
 -- Claude Code's own copy (fullscreen TUI, copy-on-select) already drops
@@ -1526,24 +1618,26 @@ local function processClipboard(text)
   end
 
   local segments = splitTableSegments(text)
-  local hasTable = false
+  local hasBlock = false
   for _, seg in ipairs(segments) do
-    if seg.kind == "table" then hasTable = true end
+    if seg.kind == "table" and not hasTableBorders(seg.block) then seg.kind = "diagram" end
+    if seg.kind ~= "text" then hasBlock = true end
   end
-  if not hasTable then
+  if not hasBlock then
     if decision.mode == "full" then return cleanClaudeTUI(normalized) end
     return cleanClaudeTUIStripOnly(normalized)
   end
 
-  -- Clean the whole text in one pass with each table replaced by a
-  -- placeholder line, so blank lines and relative indentation around
-  -- the tables come out exactly as without them. The placeholder keeps
-  -- the table's margin (or ⏺ marker) and is a structural "---" line,
-  -- which the cleaner never reflows.
+  -- Clean the whole text in one pass with each table (or box diagram,
+  -- which the cleaner would tear apart) replaced by a placeholder line,
+  -- so blank lines and relative indentation around them come out
+  -- exactly as without them. The placeholder keeps the block's margin
+  -- (or ⏺ marker) and is a structural "---" line, which the cleaner
+  -- never reflows.
   local lines, csv = {}, {}
   for _, seg in ipairs(segments) do
-    if seg.kind == "table" then
-      csv[#csv + 1] = tableBlockToCsv(seg.block)
+    if seg.kind ~= "text" then
+      csv[#csv + 1] = seg.kind == "table" and tableBlockToCsv(seg.block) or dedentBlock(seg.raw)
       lines[#lines + 1] = placeholderPrefix(seg.raw[1]) .. PLACEHOLDER:format(#csv)
     else
       for _, l in ipairs(seg.lines) do lines[#lines + 1] = l end

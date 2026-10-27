@@ -10,7 +10,7 @@ The clipboard cleaner that understands CJK — 中文 / 日本語 / 한국어 wr
 
 ![platform](https://img.shields.io/badge/platform-macOS-black?logo=apple)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![tests](https://img.shields.io/badge/tests-81%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-83%20passing-brightgreen)
 ![powered by](https://img.shields.io/badge/powered%20by-Hammerspoon-8A2BE2)
 ![CJK](https://img.shields.io/badge/CJK-first--class-orange)
 
@@ -141,7 +141,7 @@ Prefer upstream's more conservative behavior? Set the upstream values and reload
 
 ```bash
 lua test.lua               # upstream suite (21) — no regressions
-lua test_deficiencies.lua  # CJK · TUI-artifact · reflow · Codex · table→CSV · blockquote suite (60), built on real captures
+lua test_deficiencies.lua  # CJK · TUI-artifact · reflow · Codex · table→CSV · blockquote suite (62), built on real captures
 ```
 
 The `tui-fixture-*.txt` files are genuine Claude Code and Codex CLI screen captures; every fix in this fork started life as a failing test against one of them.

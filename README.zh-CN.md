@@ -10,7 +10,7 @@
 
 ![platform](https://img.shields.io/badge/platform-macOS-black?logo=apple)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![tests](https://img.shields.io/badge/tests-81%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-83%20passing-brightgreen)
 ![powered by](https://img.shields.io/badge/powered%20by-Hammerspoon-8A2BE2)
 ![CJK](https://img.shields.io/badge/CJK-%E4%B8%80%E7%AD%89%E5%85%AC%E6%B0%91-orange)
 
@@ -139,7 +139,7 @@ flowchart LR
 
 ```bash
 lua test.lua               # 上游套件（21 个）——零回归
-lua test_deficiencies.lua  # CJK · TUI 杂物 · 重排 · Codex · 表格转 CSV · 引用块套件（60 个），基于真实采集
+lua test_deficiencies.lua  # CJK · TUI 杂物 · 重排 · Codex · 表格转 CSV · 引用块套件（62 个），基于真实采集
 ```
 
 `tui-fixture-*.txt` 是 Claude Code 和 Codex CLI 的真实屏幕采集；这个 fork 里的每一个修复，最初都是针对其中某个夹具的一条失败测试。
