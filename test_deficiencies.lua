@@ -629,6 +629,92 @@ test("table: emoji cells (terminal width 2, counted as 1) still split", function
   eq(clean.tablesToCsv("│ ✅   │ 已完成 │\n├──────┼────────┤\n│ 🚀   │ 已上线 │"), "✅,已完成\n🚀,已上线")
 end)
 
+-- Claude Code's own copy (fullscreen TUI, copy-on-select) drops the
+-- margins and the ⏺ marker, so the scorer sees plain text.
+test("table: Claude's copy-on-select table (no margins) becomes CSV", function()
+  local flush = {}
+  for k, l in ipairs(boxTable) do flush[k] = l:gsub("^⏺ ", ""):gsub("^  ", "") end
+  eq(clean.classify(table.concat(flush, "\n")).mode, "none")
+  eq(clean.process(table.concat(flush, "\n")), clean.process(table.concat(boxTable, "\n")))
+end)
+
+test("table: prose around a copy-on-select table stays as it was", function()
+  local input = "说明一行。\n\n┌───┬───┐\n│ a │ b │\n├───┼───┤\n│ 1 │ 2 │\n└───┴───┘\n\n后面一行。"
+  eq(clean.process(input), "说明一行。\n\na,b\n1,2\n\n后面一行。")
+end)
+
+test("table: copy-on-select keeps the line breaks around the table", function()
+  local t = "┌───┬───┐\n│ a │ b │\n└───┴───┘"
+  eq(clean.process("before\n" .. t .. "\nafter\n"), "before\na,b\nafter\n")
+  eq(clean.process(("before\n" .. t .. "\nafter\n"):gsub("\n", "\r\n")), "before\r\na,b\r\nafter\r\n")
+end)
+
+test("table: text next to a closed border is not a cut-off row", function()
+  local t = "┌───┬───┐\n│ a │ b │\n└───┴───┘"
+  eq(clean.process("note │\n" .. t .. "\n│ note"), "note │\na,b\n│ note")
+end)
+
+-- Partial selections in Claude's copy-on-select, shaped like real
+-- captures from Claude Code 2.1.311 (2026-10-27): whole lines from the
+-- margin, or starting / ending inside a cell.
+local partialTable = {
+  "┌────────┬──────┬────────┐",
+  "│  名称  │ 数量 │  状态  │",
+  "├────────┼──────┼────────┤",
+  "│ 文档 A │ 12   │ 完成   │",
+  "├────────┼──────┼────────┤",
+  "│ 文档 B │ 3    │ 进行中 │",
+  "├────────┼──────┼────────┤",
+  "│ 文档 C │ 7    │ 待定   │",
+  "├────────┼──────┼────────┤",
+  "│ 文档 D │ 25   │ 完成   │",
+  "└────────┴──────┴────────┘",
+}
+
+local function partial(from, to)
+  local out = {}
+  for k = from, to do out[#out + 1] = partialTable[k] end
+  return table.concat(out, "\n")
+end
+
+test("table: copy-on-select of part of a table becomes CSV", function()
+  eq(clean.classify(partial(6, 8)).mode, "none")
+  eq(clean.process(partial(6, 8)), "文档 B,3,进行中\n文档 C,7,待定")
+  eq(clean.process(partial(8, 11)), "文档 C,7,待定\n文档 D,25,完成")
+  eq(clean.process(partial(2, 6)), "名称,数量,状态\n文档 A,12,完成\n文档 B,3,进行中")
+  eq(clean.process(partial(1, 8)), "名称,数量,状态\n文档 A,12,完成\n文档 B,3,进行中\n文档 C,7,待定")
+end)
+
+test("table: copy-on-select starting and ending inside a cell keeps the columns", function()
+  -- Starts in the blank after "文档 A": only spaces before the first │.
+  local input = table.concat({
+    " │ 12   │ 完成   │",
+    partialTable[5], partialTable[6], partialTable[7],
+    "│ 文档 C │ 7",
+  }, "\n")
+  eq(clean.process(input), ",12,完成\n文档 B,3,进行中\n文档 C,7,")
+end)
+
+test("table: a lone copied row without any border stays as it was", function()
+  eq(clean.process(partialTable[4]), partialTable[4])
+end)
+
+test("table: diagrams and other tools' tables in plain text stay as they are", function()
+  for _, s in ipairs({
+    -- box diagrams
+    "┌─────────┐     ┌─────────┐\n│ Client  │ ──► │ Server  │\n└─────────┘     └─────────┘",
+    "┌──────────┐\n│  Client  │\n│  (app)   │\n└──────────┘",
+    "┌───┬───┐\n│ A │ B │\n└─┬─┴─┬─┘\n  ▼   ▼",
+    -- sqlite .mode box (old and new), psql/duckdb style: header rule only
+    "┌───┬───┐\n│ a │ b │\n├───┼───┤\n│ 1 │ 2 │\n│ 3 │ 4 │\n└───┴───┘",
+    "╭───┬───╮\n│ a │ b │\n╞═══╪═══╡\n│ 1 │ 2 │\n│ 3 │ 4 │\n╰───┴───╯",
+    -- rich
+    "┏━━━┳━━━┓\n┃ a ┃ b ┃\n┡━━━╇━━━┩\n│ 1 │ 2 │\n└───┴───┘",
+  }) do
+    eq(clean.process(s), s)
+  end
+end)
+
 -- ═══════════════════════════════════════════════════════════════
 -- Blockquotes: Claude Code renders "> text" as "▎ text" (U+258E,
 -- one bar per nesting level) on every visual row. Real capture from

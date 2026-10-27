@@ -1210,6 +1210,31 @@ local function padCells(cells, leading, trailing, width)
   return out
 end
 
+-- A selection starting inside a cell whose rest is blank keeps only
+-- spaces before the next │; once they are trimmed ("│ 9.9 │ 48/95 │")
+-- the line looks like a whole row a few columns short. Its bars still
+-- sit on the border's junctions when counted from the right: returns
+-- how many cells were cut off on the left, 0 for any other line.
+local function leftCutCells(s, cols)
+  if not cols or not (startsWithBar(s) and endsWithBar(s)) then return 0 end
+  local bars = {}
+  eachColumn(s, function(ch, col)
+    if ch == BAR then bars[#bars + 1] = col end
+  end)
+  local right = 0
+  for col in pairs(cols) do right = math.max(right, col) end
+  local shift = right - bars[#bars]
+  if shift <= 0 then return 0 end
+  for _, col in ipairs(bars) do
+    if not cols[col + shift] then return 0 end
+  end
+  local lost = 0
+  for col in pairs(cols) do
+    if col < shift then lost = lost + 1 end
+  end
+  return lost
+end
+
 -- A cell wrapped over several lines: ASCII words get a space back,
 -- CJK text is joined directly.
 local function joinCellFragments(a, b)
@@ -1244,6 +1269,13 @@ local function tableBlockToCsv(block)
       lines[#lines + 1] = { border = true }
     else
       local cells, leading, trailing = splitRowCells(s, cols, borderWidth + 1)
+      local lost = leftCutCells(s, cols)
+      if lost > 0 then
+        local padded = {}
+        for _ = 1, lost do padded[#padded + 1] = "" end
+        for _, c in ipairs(cells) do padded[#padded + 1] = c end
+        cells = padded
+      end
       lines[#lines + 1] = { cells = cells, leading = leading, trailing = trailing }
     end
   end
@@ -1294,6 +1326,72 @@ local function tableBlockToCsv(block)
   return table.concat(out, "\n")
 end
 
+-- Text the scorer calls plain may still be a Claude Code table: its own
+-- copy (fullscreen TUI, copy-on-select) drops the margins. Without the
+-- scorer, convert only what Claude Code itself draws, whole or a
+-- selected part of it: light lines (┌─┬─┐ ├─┼─┤ └─┴─┘) with at least
+-- one border or separator in the selection, every border on the same
+-- junction columns, ┌ only first and └ only last, at least two
+-- columns, every row closed on both sides except a first line cut on
+-- the left and a last line cut on the right. The separators must also
+-- leave no doubt which lines form a row: Claude puts one between every
+-- row, while sqlite / psql / duckdb draw one under the header only,
+-- where a two-line section could be two records or one wrapped row.
+-- A neighbouring line drawn with other box characters (rich's ┏━┳━┓
+-- header) means the block is only part of a table not drawn by Claude.
+-- Diagrams, a lone row and other tools' tables stay as they are.
+local lightBorderChars = { "─", "┌", "┬", "┐", "├", "┼", "┤", "└", "┴", "┘" }
+
+local function isLightBorder(s)
+  local rest = s
+  for _, c in ipairs(lightBorderChars) do rest = rest:gsub(c, "") end
+  return rest == ""
+end
+
+local function junctionSignature(s)
+  local cols = {}
+  eachColumn(s, function(ch, col)
+    if junctionSet[ch] then cols[#cols + 1] = col end
+  end)
+  return table.concat(cols, ",")
+end
+
+-- Box-drawing characters (U+2500–U+257F) other than the plain │.
+local function hasOtherBoxChars(s)
+  return s ~= nil and s:gsub(BAR, ""):find("\226[\148\149]") ~= nil
+end
+
+local function isClaudeTable(block, before, after)
+  if hasOtherBoxChars(before) or hasOtherBoxChars(after) then return false end
+  local cols, width = borderColumns(block)
+  if not cols or width < 2 then return false end
+  local signature
+  local separators, sectionLines, multiLine = 0, 0, false
+  for k, s in ipairs(block) do
+    if isTableBorder(s) then
+      signature = signature or junctionSignature(s)
+      if not isLightBorder(s) or junctionSignature(s) ~= signature then return false end
+      if (s:sub(1, #"┌") == "┌" and k > 1) or (s:sub(1, #"└") == "└" and k < #block) then
+        return false
+      end
+      if k > 1 and k < #block then separators = separators + 1 end
+      if sectionLines > 1 then multiLine = true end
+      sectionLines = 0
+    else
+      local whole = startsWithBar(s) and endsWithBar(s)
+        and (barsOnColumns(s, cols) == width + 1 or countBars(s) == width + 1)
+      local cutLeft = k == 1 and endsWithBar(s)
+        and (not startsWithBar(s) or leftCutCells(s, cols) > 0)
+      local cutRight = k == #block and startsWithBar(s) and not endsWithBar(s)
+        and barsOnColumns(s, cols) == countBars(s)
+      if not (whole or cutLeft or cutRight) then return false end
+      sectionLines = sectionLines + 1
+    end
+  end
+  if sectionLines > 1 then multiLine = true end
+  return separators >= 2 or not multiLine
+end
+
 -- Split text into prose and table segments, in order. A table segment
 -- keeps its raw lines and line range alongside the stripped block.
 local function splitTableSegments(text)
@@ -1322,22 +1420,28 @@ local function splitTableSegments(text)
       for k = i, j do block[#block + 1] = stripped[k] end
       if isValidTableBlock(block) then
         local first, last = i, j
-        -- Pull in a one-bar fragment right before or after the table.
+        -- Pull in a one-bar fragment right before or after the table,
+        -- unless the table's own outer border is in between.
         local prev = segments[#segments]
-        if first > 1 and isRowFragment(stripped[first - 1]) and endsWithBar(stripped[first - 1])
+        local closedTop = block[1]:sub(1, #"┌") == "┌" or block[1]:sub(1, #"╭") == "╭"
+        local closedBottom = block[#block]:sub(1, #"└") == "└" or block[#block]:sub(1, #"╰") == "╰"
+        if first > 1 and not closedTop and isRowFragment(stripped[first - 1]) and endsWithBar(stripped[first - 1])
             and prev and prev.kind == "text" and prev.lines[#prev.lines] == lines[first - 1] then
           table.remove(prev.lines)
           if #prev.lines == 0 then table.remove(segments) end
           first = first - 1
           table.insert(block, 1, stripped[first])
         end
-        if last < #lines and isRowFragment(stripped[last + 1]) and startsWithBar(stripped[last + 1]) then
+        if last < #lines and not closedBottom and isRowFragment(stripped[last + 1]) and startsWithBar(stripped[last + 1]) then
           last = last + 1
           block[#block + 1] = stripped[last]
         end
         local raw = {}
         for k = first, last do raw[#raw + 1] = lines[k] end
-        segments[#segments + 1] = { kind = "table", block = block, raw = raw }
+        segments[#segments + 1] = {
+          kind = "table", block = block, raw = raw,
+          before = stripped[first - 1], after = stripped[last + 1],
+        }
         i = last + 1
       else
         for k = i, j do pushText(k) end
@@ -1400,9 +1504,26 @@ local function processClipboard(text)
   local normalized = recoverFlattenedNumberedBlock(text)
   local decision = classifyClaudeClipboard(normalized)
   -- Same gate as before: text the scorer would not touch (code, plain
-  -- text) stays byte-for-byte, tables in it included — apart from
-  -- leading ▎ quote bars, which are never content.
-  if decision.mode == "none" then return stripQuoteBars(text) end
+  -- text) stays byte-for-byte — apart from leading ▎ quote bars, which
+  -- are never content, and whole Claude Code tables (see isClaudeTable).
+  if decision.mode == "none" then
+    local segments = splitTableSegments(text)
+    local out, converted = {}, false
+    for _, seg in ipairs(segments) do
+      if seg.kind == "table" and isClaudeTable(seg.block, seg.before, seg.after) then
+        out[#out + 1] = tableBlockToCsv(seg.block)
+        converted = true
+      else
+        out[#out + 1] = stripQuoteBars(table.concat(seg.raw or seg.lines, "\n"))
+      end
+    end
+    if not converted then return stripQuoteBars(text) end
+    -- splitLines normalized the line breaks and dropped the final one.
+    local eol = text:find("\r\n", 1, true) and "\r\n" or "\n"
+    local result = table.concat(out, "\n"):gsub("\n", eol)
+    if text:sub(-1) == "\n" then result = result .. eol end
+    return result
+  end
 
   local segments = splitTableSegments(text)
   local hasTable = false

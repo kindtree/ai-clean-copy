@@ -10,7 +10,7 @@ The clipboard cleaner that understands CJK — 中文 / 日本語 / 한국어 wr
 
 ![platform](https://img.shields.io/badge/platform-macOS-black?logo=apple)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![tests](https://img.shields.io/badge/tests-67%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-81%20passing-brightgreen)
 ![powered by](https://img.shields.io/badge/powered%20by-Hammerspoon-8A2BE2)
 ![CJK](https://img.shields.io/badge/CJK-first--class-orange)
 
@@ -91,7 +91,7 @@ Set up ai-clean-copy on this Mac:
 | Wrapped list items (`- …` / `1. …`), even a stranded `3. API` head | Each item back on one line |
 | Word torn at the wrap point: `修` ⏎ `改` | `修改` — joined with no stray space |
 | Trailing whitespace | Gone |
-| Box-drawn tables (`┌─┬─┐` / `│ a │ b │`): the whole table, a few rows, or a selection starting mid-row | CSV, one row per line (cells containing commas are quoted) |
+| Box-drawn tables (`┌─┬─┐` / `│ a │ b │`): the whole table, a few rows, or a selection starting mid-row (from Claude Code's own fullscreen copy-on-select: any part that includes a border or separator line; a lone row stays as it is) | CSV, one row per line (cells containing commas are quoted) |
 
 And just as important, what **never** gets touched: code blocks (indentation intact), `ls`/`ps`/table output (column alignment detected and protected), shell prompts, and anything that doesn't look like agent TUI output — the scorer is deliberately conservative, low confidence means hands off.
 
@@ -141,7 +141,7 @@ Prefer upstream's more conservative behavior? Set the upstream values and reload
 
 ```bash
 lua test.lua               # upstream suite (21) — no regressions
-lua test_deficiencies.lua  # CJK · TUI-artifact · reflow · Codex · table→CSV · blockquote suite (50), built on real captures
+lua test_deficiencies.lua  # CJK · TUI-artifact · reflow · Codex · table→CSV · blockquote suite (60), built on real captures
 ```
 
 The `tui-fixture-*.txt` files are genuine Claude Code and Codex CLI screen captures; every fix in this fork started life as a failing test against one of them.
