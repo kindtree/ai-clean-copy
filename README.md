@@ -85,6 +85,7 @@ Set up ai-clean-copy on this Mac:
 |---|---|
 | `··` 2-space margin on every line | Flush-left text (nested indent preserved) |
 | `⏺` `❯` `⎿` markers (Claude Code) · `•` `›` markers (Codex CLI) | Just the content |
+| `▎` blockquote bars (Claude Code), nested `▎ ▎` included | The quoted text, wrapped rows rejoined |
 | `✻ Worked for 11s` · `(ctrl+o to expand)` · `────` | Dropped entirely |
 | Paragraphs hard-wrapped at terminal width | Rejoined into real paragraphs |
 | Wrapped list items (`- …` / `1. …`), even a stranded `3. API` head | Each item back on one line |
@@ -140,7 +141,7 @@ Prefer upstream's more conservative behavior? Set the upstream values and reload
 
 ```bash
 lua test.lua               # upstream suite (21) — no regressions
-lua test_deficiencies.lua  # CJK · TUI-artifact · reflow · Codex · table→CSV suite (46), built on real captures
+lua test_deficiencies.lua  # CJK · TUI-artifact · reflow · Codex · table→CSV · blockquote suite (50), built on real captures
 ```
 
 The `tui-fixture-*.txt` files are genuine Claude Code and Codex CLI screen captures; every fix in this fork started life as a failing test against one of them.
@@ -148,7 +149,7 @@ The `tui-fixture-*.txt` files are genuine Claude Code and Codex CLI screen captu
 ## Limitations
 
 - macOS only (Hammerspoon requirement).
-- Only keyboard `⌘C` is intercepted — copy-on-select and context-menu copy are not.
+- Keyboard `⌘C` is intercepted, and so is Claude Code's own copy-on-select (fullscreen TUI, on by default): any clipboard write while a terminal is in front gets cleaned. A terminal's context-menu copy is not caught unless the terminal is still in front when the clipboard changes.
 - Fenced code blocks are flattened by the terminal's own clipboard handling before any script can run.
 - At ASCII↔CJK join boundaries the original spacing is unrecoverable; this fork drops the space (`Python脚本`) because keeping words whole beats keeping decorative spaces.
 

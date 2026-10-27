@@ -83,6 +83,7 @@ cd ai-clean-copy && ./install.sh
 |---|---|
 | 每行开头的 `··` 2 格边距 | 顶格文本（嵌套缩进保留） |
 | `⏺` `❯` `⎿`（Claude Code）· `•` `›`（Codex）标记 | 只留内容 |
+| 引用块左边的 `▎` 竖条（Claude Code），含嵌套的 `▎ ▎` | 只留引用内容，折行拼回 |
 | `✻ Worked for 11s` · `(ctrl+o to expand)` · `────` | 整行丢弃 |
 | 按终端宽度硬折断的段落 | 拼回完整段落 |
 | 折行的列表项（`- …` / `1. …`），包括 `3. API` 这种被落下的短头 | 每项拼回一行 |
@@ -138,7 +139,7 @@ flowchart LR
 
 ```bash
 lua test.lua               # 上游套件（21 个）——零回归
-lua test_deficiencies.lua  # CJK · TUI 杂物 · 重排 · Codex · 表格转 CSV 套件（46 个），基于真实采集
+lua test_deficiencies.lua  # CJK · TUI 杂物 · 重排 · Codex · 表格转 CSV · 引用块套件（50 个），基于真实采集
 ```
 
 `tui-fixture-*.txt` 是 Claude Code 和 Codex CLI 的真实屏幕采集；这个 fork 里的每一个修复，最初都是针对其中某个夹具的一条失败测试。
@@ -146,7 +147,7 @@ lua test_deficiencies.lua  # CJK · TUI 杂物 · 重排 · Codex · 表格转 C
 ## 限制
 
 - 仅 macOS（Hammerspoon 依赖）。
-- 只拦截键盘 `⌘C`——「选中即复制」和右键菜单复制拦不到。
+- 拦截键盘 `⌘C`，也覆盖 Claude Code 自己的「选中即复制」（全屏界面，默认开启）：终端在前台时剪贴板一有新内容就清理。终端的右键菜单复制只有在剪贴板变化时终端仍在前台才会被清理。
 - 围栏代码块（三反引号）在脚本运行前就被终端自身的剪贴板处理压平了。
 - 中英边界处原始空格无法复原；本 fork 选择不加空格（`Python脚本`）——保住词的完整性比保住装饰性空格更重要。
 

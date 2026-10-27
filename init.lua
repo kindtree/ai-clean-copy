@@ -5,7 +5,7 @@
 -- Intercepts Cmd+C in terminal apps, performs the real copy,
 -- then conditionally cleans Claude TUI artifacts in the copied text.
 
-local VERSION = "2026-07-13"
+local VERSION = "2026-10-27"
 
 local scriptDir = debug.getinfo(1, "S").source:match("@(.*/)")
 local clean = dofile(scriptDir .. "clean.lua")
@@ -90,8 +90,7 @@ local function isPlainCmdC(event)
     and not flags.fn
 end
 
-local function handleTerminalCopy()
-  local content = readClipboardAfterCopy()
+local function cleanClipboard(content)
   if type(content) ~= "string" then return end
   -- Claude TUI copies are conversation-sized; anything huge is a file
   -- dump. Skip cleaning rather than stall Hammerspoon's main thread.
@@ -112,6 +111,10 @@ local function handleTerminalCopy()
   hs.pasteboard.setContents(cleaned)
 end
 
+local function handleTerminalCopy()
+  cleanClipboard(readClipboardAfterCopy())
+end
+
 copyInterceptor = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, function(event)
   if copyInProgress then return false end
   if not isPlainCmdC(event) then return false end
@@ -130,4 +133,25 @@ copyInterceptor = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, function(
 end)
 
 copyInterceptor:start()
-hs.printf("claude-copy: terminal Cmd+C cleaner loaded (%s)", VERSION)
+
+-- ═══════════════════════════════════════════════════════════════
+-- Copy-on-select
+-- ═══════════════════════════════════════════════════════════════
+-- Claude Code's fullscreen TUI handles mouse selection itself and,
+-- with copyOnSelect (on by default), writes the clipboard the moment
+-- the mouse is released. No ⌘C is involved — and a ⌘C pressed after
+-- that changes nothing, so the interceptor above comes back empty.
+-- Clean any clipboard write that lands while a terminal is in front.
+-- Our own setContents comes back through here as well; process() is
+-- a no-op on text it already cleaned, so nothing is written twice.
+-- A global, not a local: an unreferenced watcher gets garbage
+-- collected and silently stops.
+ClaudeCopyPasteboardWatcher = hs.pasteboard.watcher.new(function(content)
+  if copyInProgress or not isTerminalFocused() then return end
+  local ok, err = pcall(cleanClipboard, content)
+  if not ok then
+    hs.printf("claude-copy: copy-on-select cleaner failed: %s", tostring(err))
+  end
+end)
+
+hs.printf("claude-copy: terminal Cmd+C + copy-on-select cleaner loaded (%s)", VERSION)

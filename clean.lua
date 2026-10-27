@@ -341,6 +341,7 @@ end
 -- The text that follows sits at margin level, so marker lines are
 -- treated as margined content with the marker removed.
 local contentMarkers = { "⏺ ", "❯ ", "• ", "› " }
+local QUOTE_BAR = "▎"
 
 local function parseClaudeLine(rawLine)
   local line = rawLine:gsub("%s+$", "")
@@ -363,6 +364,16 @@ local function parseClaudeLine(rawLine)
     line = line:gsub("^│ ?", "", 1)
   end
 
+  -- "▎ quoted text": Claude Code draws a markdown blockquote as a dim
+  -- U+258E bar per nesting level ("▎ ▎ " at depth 2) on every visual
+  -- row, soft-wrapped continuations included. It is rendering, not
+  -- content: left in, it also lands mid-sentence once rows are joined.
+  local quoteDepth = 0
+  while line:sub(1, #QUOTE_BAR) == QUOTE_BAR do
+    line = line:sub(#QUOTE_BAR + 1):gsub("^ ", "", 1)
+    quoteDepth = quoteDepth + 1
+  end
+
   -- "⎿  result" tool-result marker (rendered inside the margin).
   local hadToolMarker = false
   if line:sub(1, 3) == "⎿" then
@@ -378,6 +389,7 @@ local function parseClaudeLine(rawLine)
     hasMargin = hasMargin,
     hadPipe = hadPipe or hadToolMarker,
     hadMarker = hadMarker,
+    quoteDepth = quoteDepth,
     chrome = nonEmpty and isChromeLine(line) or false,
     width = displayWidth(line),
     indented = line:match("^    %S") ~= nil or line:match("^\t") ~= nil,
@@ -920,6 +932,8 @@ local function cleanClaudeTUI(text)
         if nxt.indented then break end
         if nxt.codeLike then break end
         if nxt.tableLike then break end
+        -- Quote rows only continue a quote paragraph of the same depth.
+        if nxt.quoteDepth ~= cur.quoteDepth then break end
         if isStructuralLine(nxt.text) then break end
         if not skipWidthCheck
           and wrapWidth >= config.wrapMinInferredWidth
@@ -1361,14 +1375,34 @@ local function placeholderPrefix(raw)
   return indent
 end
 
--- The pipeline claude-copy.lua runs on every terminal ⌘C. Returns the
+-- Claude Code's own copy (fullscreen TUI, copy-on-select) already drops
+-- the margins and rejoins soft wraps, so the scorer sees plain text and
+-- says "none" — but the ▎ blockquote bars come along. Strip only those;
+-- every other byte stays as it was.
+local function stripQuoteBars(text)
+  local lines, changed = {}, false
+  for raw in (text .. "\n"):gmatch("(.-)\n") do
+    local indent, rest = raw:match("^([ \t]*)(.*)$")
+    local bars = 0
+    while rest:sub(1, #QUOTE_BAR) == QUOTE_BAR do
+      rest = rest:sub(#QUOTE_BAR + 1):gsub("^ ", "", 1)
+      bars = bars + 1
+    end
+    if bars > 0 then changed = true end
+    lines[#lines + 1] = bars > 0 and indent .. rest or raw
+  end
+  return changed and table.concat(lines, "\n") or text
+end
+
+-- The pipeline claude-copy.lua runs on every terminal copy. Returns the
 -- text unchanged when there is nothing to clean.
 local function processClipboard(text)
   local normalized = recoverFlattenedNumberedBlock(text)
   local decision = classifyClaudeClipboard(normalized)
   -- Same gate as before: text the scorer would not touch (code, plain
-  -- text) stays byte-for-byte, tables in it included.
-  if decision.mode == "none" then return text end
+  -- text) stays byte-for-byte, tables in it included — apart from
+  -- leading ▎ quote bars, which are never content.
+  if decision.mode == "none" then return stripQuoteBars(text) end
 
   local segments = splitTableSegments(text)
   local hasTable = false

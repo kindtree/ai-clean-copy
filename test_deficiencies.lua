@@ -630,6 +630,77 @@ test("table: emoji cells (terminal width 2, counted as 1) still split", function
 end)
 
 -- ═══════════════════════════════════════════════════════════════
+-- Blockquotes: Claude Code renders "> text" as "▎ text" (U+258E,
+-- one bar per nesting level) on every visual row. Real capture from
+-- `cmux read-screen`, 2026-10-27 (Claude Code 2.1.311).
+-- ═══════════════════════════════════════════════════════════════
+
+local quoteCapture = {
+  "  ▎ 查清楚了，是我们的 bug，不是你操作的问题。你出完两套写真后切到 AI 换装，那时生成次数刚好用完，弹出了充值框；从里面点「返回解锁」再解锁时，系统错把上一套写真当成要解锁的图，你那 1 ",
+  "  ▎ 次就扣在写真上了，所以出来的是之前那张拿花的。已经修好。",
+  "  ▎ 补偿已到账：取件码 SGKJJYJNY6 加了 5 次解锁，另外附带 10 次生成，刷新页面就能看到。",
+  "  ▎ AI 换装我用你传的白 T 恤照片试了「休闲时尚」，效果如图，别的款式你可以自己再试。",
+  "  ▎ 之前那套写真 4 张已经解锁了，在「我的作品」里能下载全部 4 张，不会再扣次数。",
+}
+
+test("quote: ▎ bars are stripped and wrapped quote rows rejoin", function()
+  -- "1次": the terminal wrapped at the space after "1" and the copy
+  -- trims trailing spaces, so the CJK join has nothing to restore.
+  eq(clean.process(table.concat(quoteCapture, "\n")), table.concat({
+    "查清楚了，是我们的 bug，不是你操作的问题。你出完两套写真后切到 AI 换装，那时生成次数刚好用完，弹出了充值框；从里面点「返回解锁」再解锁时，系统错把上一套写真当成要解锁的图，你那 1次就扣在写真上了，所以出来的是之前那张拿花的。已经修好。",
+    "补偿已到账：取件码 SGKJJYJNY6 加了 5 次解锁，另外附带 10 次生成，刷新页面就能看到。",
+    "AI 换装我用你传的白 T 恤照片试了「休闲时尚」，效果如图，别的款式你可以自己再试。",
+    "之前那套写真 4 张已经解锁了，在「我的作品」里能下载全部 4 张，不会再扣次数。",
+  }, "\n"))
+end)
+
+test("quote: mixed copy keeps the heading and list around the quote", function()
+  local input = table.concat(quoteCapture, "\n") .. "\n\n  残留风险（这次没改）\n\n"
+    .. "  - 付款查单有一个并发报错：两次查单同时进来时会报「数据库已关闭」，只让那一次查单失败，不影响到账。修法是两行代码。"
+  local out = clean.process(input)
+  assert(not out:find("▎", 1, true), "bar left in output:\n" .. out)
+  assert(out:find("\n\n残留风险（这次没改）\n\n%- 付款查单"), "structure lost:\n" .. out)
+end)
+
+test("quote: nested ▎ ▎ bars are all stripped", function()
+  eq(clean.process("  ▎ 外层引用的一句话。\n  ▎ ▎ 内层引用的一句话。"),
+    "外层引用的一句话。\n内层引用的一句话。")
+end)
+
+-- What Claude Code's own copy-on-select puts on the clipboard for the
+-- same rows (fullscreen TUI): margins already gone, the soft wrap
+-- already rejoined ("1 次" keeps its space), the bars still there.
+-- It scores as plain text, so only the bars may change.
+test("quote: Claude's copy-on-select text loses only its ▎ bars", function()
+  local copied = table.concat({
+    "▎ 查清楚了，是我们的 bug，不是你操作的问题。你那 1 次就扣在写真上了，所以出来的是之前那张拿花的。已经修好。",
+    "▎ 补偿已到账：取件码 SGKJJYJNY6 加了 5 次解锁，另外附带 10 次生成，刷新页面就能看到。",
+    "",
+    "残留风险（这次没改）",
+    "▎ ▎ 嵌套的一句。",
+  }, "\n")
+  eq(clean.process(copied), table.concat({
+    "查清楚了，是我们的 bug，不是你操作的问题。你那 1 次就扣在写真上了，所以出来的是之前那张拿花的。已经修好。",
+    "补偿已到账：取件码 SGKJJYJNY6 加了 5 次解锁，另外附带 10 次生成，刷新页面就能看到。",
+    "",
+    "残留风险（这次没改）",
+    "嵌套的一句。",
+  }, "\n"))
+end)
+
+test("quote: plain text without leading bars stays byte-for-byte", function()
+  for _, s in ipairs({ "进度 ▎▎▎ 30%\n下一行\n", "local x = 1\nreturn x", "a\r\nb" }) do
+    eq(clean.process(s), s)
+  end
+end)
+
+test("quote: a quote row never swallows the plain row after it", function()
+  local wide = string.rep("引", 60)
+  eq(clean.process("  ▎ " .. wide .. "\n  " .. string.rep("正", 30)),
+    wide .. "\n" .. string.rep("正", 30))
+end)
+
+-- ═══════════════════════════════════════════════════════════════
 -- Results
 -- ═══════════════════════════════════════════════════════════════
 
