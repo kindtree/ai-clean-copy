@@ -848,6 +848,153 @@ test("quote: a quote row never swallows the plain row after it", function()
 end)
 
 -- ═══════════════════════════════════════════════════════════════
+-- Prompt rows and short lines keep their own line breaks. Field
+-- report, 2026-10-29: copying a sent prompt (❯ echo, continuation
+-- rows indented by two) ran lines together. The longest copied line
+-- was taken as the wrap width, so it always looked full and swallowed
+-- the line after it; numbered rows written as "1.xxx" or "1、" were
+-- not list items, so similar-length rows were rejoined as a paragraph.
+-- ═══════════════════════════════════════════════════════════════
+
+local promptLine1 = "每次使用到浏览器，需要点击agree的时候，就自动同意。你是写个脚本，然后在使用web-access自动调用吗,还是有好的方案呢"
+local promptLine3 = "授权弹窗是我写的监视脚本自动点的「允许」"
+local shortItems = { "把两台电脑的配置同步一下看看结果", "检查一下tailscale是不是直连的情况", "顺便看看github的配置有什么不同" }
+
+-- Prompt rows as copied: "❯ " on the first row, two spaces on the rest.
+local function promptRows(rows, firstPrefix)
+  local out = {}
+  for k, r in ipairs(rows) do
+    out[k] = (k == 1 and (firstPrefix or "❯ ") or "  ") .. r
+  end
+  return table.concat(out, "\n")
+end
+
+test("prompt: a ''' line is never joined to the line before it", function()
+  local rows = { promptLine1, "'''", promptLine3, "'''" }
+  local want = table.concat(rows, "\n")
+  eq(clean.process(promptRows(rows)), want, "with the ❯ marker")
+  eq(clean.process(promptRows(rows, "")), want, "selection started after the marker")
+end)
+
+test("prompt: nothing is joined onto a ''' line, even a long CJK run", function()
+  -- Two full rows before the fence keep the paragraph in full mode.
+  local para1, para2 = string.rep("段", 55), string.rep("落", 55)
+  local long = string.rep("长", 60)
+  eq(clean.process(promptRows({ para1, para2, "'''", long, "'''" })),
+    para1 .. para2 .. "\n'''\n" .. long .. "\n'''")
+end)
+
+test("prompt: \"\"\" and ~~~ lines stay on their own lines", function()
+  for _, fence in ipairs({ '"""', "~~~" }) do
+    local rows = { promptLine1, fence, promptLine3, fence }
+    eq(clean.process(promptRows(rows)), table.concat(rows, "\n"), fence)
+  end
+end)
+
+test("prompt: numbered rows written the Chinese way stay separate", function()
+  local marks = {
+    { "1.", "2.", "3." }, { "1. ", "2. ", "3. " }, { "1、", "2、", "3、" },
+    { "1）", "2）", "3）" }, { "1)", "2)", "3)" }, { "(1)", "(2)", "(3)" },
+    { "（1）", "（2）", "（3）" }, { "①", "②", "③" }, { "一、", "二、", "三、" },
+  }
+  for _, m in ipairs(marks) do
+    local rows = {}
+    for k, s in ipairs(shortItems) do rows[k] = m[k] .. s end
+    eq(clean.process(promptRows(rows)), table.concat(rows, "\n"), m[1])
+  end
+end)
+
+test("prompt: short unnumbered lines of similar length stay separate", function()
+  eq(clean.process(promptRows(shortItems)), table.concat(shortItems, "\n"))
+end)
+
+test("prompt: the one long line does not swallow the line after it", function()
+  local rows = { promptLine1, "还有另外一个问题" }
+  eq(clean.process(promptRows(rows)), table.concat(rows, "\n"))
+end)
+
+test("prompt: typed lines stay apart when the copy also holds a full-width reply", function()
+  local reply1, reply2 = string.rep("回", 58), string.rep("复", 58)
+  local input = table.concat({
+    "❯ " .. promptLine1, "  还有另外一个问题", "",
+    "⏺ " .. reply1, "  " .. reply2, "  结尾。",
+  }, "\n")
+  eq(clean.process(input), promptLine1 .. "\n还有另外一个问题\n\n" .. reply1 .. reply2 .. "结尾。")
+end)
+
+-- Known trade-off, classic renderer only: a prompt that wrapped onto
+-- exactly two rows looks just like a long typed line followed by a
+-- short one, so it stays two lines. The fullscreen renderer rejoins its
+-- own soft wraps before copying, so there it never arises.
+test("prompt: a prompt wrapped onto exactly two rows stays two lines", function()
+  local a = "帮我把这个仓库里所有用到旧版日志接口的地方都换成新的结构化日志写法，改完之后跑一遍测试，确认没有遗"
+  local b = "漏的调用点再告诉我结果"
+  eq(clean.process(promptRows({ a, b })), a .. "\n" .. b)
+end)
+
+test("prompt: a prompt wrapped onto three rows is rejoined", function()
+  local a = string.rep("这是一条很长的消息", 6) .. "在这里"
+  local b = string.rep("被终端折到了下一行", 6) .. "继续写"
+  eq(clean.process(promptRows({ a, b, "最后一点" })), a .. b .. "最后一点")
+end)
+
+-- In a response, the loose numbered forms are not list heads: Claude
+-- Code wraps at spaces (CJK at any character), so a wrapped row can
+-- start with "(3)", "（3）" or the "一、" of 统一、. Field-tested shapes;
+-- the old cleaner rejoined each of them into one line.
+test("response: wrapped rows starting like a numbered item still rejoin", function()
+  local inputs = {
+    "⏺ The fix does three things in order: (1) it parses the header\n  before anything else is read, (2) it validates the token\n  against the cached key set and rejects stale entries, and\n  (3) it retries the request once with a fresh key if\n  validation failed the first time around.",
+    "⏺ 这次改动主要做了三件事：（1）把配置文件的读取挪到启动阶段统一处理，避免\n  每次请求都重复解析；（2）给缓存加上过期时间，过期后自动从磁盘重新加载；\n  （3）补齐了单元测试，覆盖了配置缺失和格式错误两种情况。",
+    "⏺ " .. string.rep("这个接口在设计上要做到", 4) .. "简单、统\n  一、可靠，" .. string.rep("调用方不需要关心内部的细节", 3) .. "就能用\n  " .. string.rep("后面再补充更多的说明文字", 3) .. "。",
+  }
+  for _, input in ipairs(inputs) do
+    local out = clean.process(input)
+    eq(out:find("\n"), nil, "should be one paragraph, got:\n" .. out)
+  end
+end)
+
+test("response: a fence mark inside prose does not split it", function()
+  local out = clean.process("⏺ When you write a docstring in Python, put three quote marks\n  \"\"\" on both ends, and keep the first line short so tools can\n  show it in a list.")
+  eq(out, "When you write a docstring in Python, put three quote marks \"\"\" on both ends, and keep the first line short so tools can show it in a list.")
+end)
+
+test("response: a paragraph in a narrow pane still rejoins", function()
+  eq(clean.process("⏺ 剪贴板清理工具通过监听操作系统的剪贴板\n  事件来工作。当用户复制内容时，工具会拦\n  截并分析该数据，判断是否符合删除规则。"),
+    "剪贴板清理工具通过监听操作系统的剪贴板事件来工作。当用户复制内容时，工具会拦截并分析该数据，判断是否符合删除规则。")
+end)
+
+-- Claude Code's own copy (fullscreen TUI, copy-on-select or ⌘C): soft
+-- wraps are already rejoined and the margins are unselectable, but the
+-- typed rows of a prompt keep the two empty columns left of the text.
+-- Selection usually starts at the first character, so there is no ❯ to
+-- recognise the prompt by — claude-copy.lua says where the copy came
+-- from instead, and every line break in it is kept.
+test("app copy: every typed line break is kept", function()
+  local function appRows(rows)
+    return rows[1] .. "\n  " .. table.concat(rows, "\n  ", 2)
+  end
+  local numbered = {}
+  for k, s in ipairs(shortItems) do numbered[k] = k .. "." .. s end
+  for _, rows in ipairs({
+    numbered,
+    shortItems,
+    { promptLine1, "'''", promptLine3, "'''" },
+    { promptLine1, "还有另外一个问题" },
+  }) do
+    eq(clean.process(appRows(rows), { appCopy = true }), table.concat(rows, "\n"), rows[1])
+  end
+end)
+
+test("list: a wrapped row that starts with a decimal number still rejoins", function()
+  -- "3.14" / "2.5" are numbers, not list markers.
+  local a = "圆周率是一个无理数，它的小数部分无限不循环，人们在日常里最常用的近似值是"
+  local b = "3.14，在一般的工程计算里通常已经足够精确，不需要再用更多的位数来表示它"
+  local c = "2.5小时以内就能讲完这一部分的内容，后面的章节我们再接着往下展开来讲述"
+  eq(clean.process("  " .. a .. "\n  " .. b .. "\n  " .. c), a .. b .. c)
+end)
+
+-- ═══════════════════════════════════════════════════════════════
 -- Results
 -- ═══════════════════════════════════════════════════════════════
 

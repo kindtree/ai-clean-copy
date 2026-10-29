@@ -93,7 +93,7 @@ Set up ai-clean-copy on this Mac:
 | Trailing whitespace | Gone |
 | Box-drawn tables (`┌─┬─┐` / `│ a │ b │`): the whole table, a few rows, or a selection starting mid-row (from Claude Code's own fullscreen copy-on-select: any part that includes a border or separator line; a lone row stays as it is) | CSV, one row per line (cells containing commas are quoted) |
 
-And just as important, what **never** gets touched: code blocks (indentation intact), `ls`/`ps`/table output (column alignment detected and protected), shell prompts, and anything that doesn't look like agent TUI output — the scorer is deliberately conservative, low confidence means hands off.
+And just as important, what **never** gets touched: code blocks (indentation intact), `ls`/`ps`/table output (column alignment detected and protected), shell prompts, typed line breaks (every one left in Claude Code's own fullscreen copy, which has already rejoined its soft wraps; the ones inside a `❯` prompt, numbered rows like `1.xxx` / `1、` / `（1）` / `①` / `一、` included; and `'''` / `"""` / `~~~` on a line of their own), and anything that doesn't look like agent TUI output — the scorer is deliberately conservative, low confidence means hands off.
 
 ## Why CJK needs its own fork
 
@@ -141,7 +141,7 @@ Prefer upstream's more conservative behavior? Set the upstream values and reload
 
 ```bash
 lua test.lua               # upstream suite (21) — no regressions
-lua test_deficiencies.lua  # CJK · TUI-artifact · reflow · Codex · table→CSV · blockquote suite (62), built on real captures
+lua test_deficiencies.lua  # CJK · TUI-artifact · reflow · Codex · table→CSV · blockquote · typed-line-break suite (76), built on real captures
 ```
 
 The `tui-fixture-*.txt` files are genuine Claude Code and Codex CLI screen captures; every fix in this fork started life as a failing test against one of them.
@@ -152,6 +152,8 @@ The `tui-fixture-*.txt` files are genuine Claude Code and Codex CLI screen captu
 - Keyboard `⌘C` is intercepted, and so is Claude Code's own copy-on-select (fullscreen TUI, on by default): any clipboard write while a terminal is in front gets cleaned. A terminal's context-menu copy is not caught unless the terminal is still in front when the clipboard changes.
 - Fenced code blocks are flattened by the terminal's own clipboard handling before any script can run.
 - At ASCII↔CJK join boundaries the original spacing is unrecoverable; this fork drops the space (`Python脚本`) because keeping words whole beats keeping decorative spaces.
+- In the classic TUI, a prompt that wrapped onto exactly two rows looks just like a long typed line followed by a short one, so it stays two lines; prompts wrapped onto three or more rows are rejoined. The fullscreen TUI doesn't have this problem: Claude Code rejoins its own soft wraps before copying.
+- A clipboard write with no `⌘C` while iTerm2 / WezTerm / Warp is in front may be the terminal's own copy-on-select, so it gets the full clean, reflow included.
 
 ## Credits
 

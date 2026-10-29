@@ -263,9 +263,60 @@ local function hasCJKKeyColon(line)
   return pos ~= nil and pos <= 25 and not line:sub(1, pos - 1):match("%s")
 end
 
-local function isStructuralLine(line)
+-- 一 二 三 四 五 六 七 八 九 十
+local cjkNumerals = {
+  [0x4E00] = true, [0x4E8C] = true, [0x4E09] = true, [0x56DB] = true, [0x4E94] = true,
+  [0x516D] = true, [0x4E03] = true, [0x516B] = true, [0x4E5D] = true, [0x5341] = true,
+}
+
+-- Numbered rows the way people type them, not only markdown's "1. ":
+-- "1.xxx" (no space), "1．", "1、", "1)", "1）", "(1)", "（1）", "①",
+-- "一、", "（一）". A dot followed by a digit is a number ("3.14").
+-- Only for typed rows (see isStructuralLine): in a response, a wrapped
+-- row can start with "(3)" or "一、" mid-sentence.
+local function isNumberedItemLine(line)
+  if line:match("^%d+%.%s")
+    or line:match("^%d%d?%d?%.[^%d%s%.]")
+    or line:match("^%d%d?%d?．")
+    or line:match("^%d%d?%d?、")
+    or line:match("^%d%d?%d?%)")
+    or line:match("^%d%d?%d?）")
+    or line:match("^%(%d%d?%d?%)")
+    or line:match("^（%d%d?%d?）")
+  then
+    return true
+  end
+  local cp, len = decodeCodepoint(line, 1)
+  if cp and cp >= 0x2460 and cp <= 0x2473 then return true end -- ① … ⑳
+  local i, open = 1, cp == 0xFF08 -- （
+  if open then
+    i = i + len
+    cp, len = decodeCodepoint(line, i)
+  end
+  local start = i
+  while cp and cjkNumerals[cp] do
+    i = i + len
+    cp, len = decodeCodepoint(line, i)
+  end
+  if i == start then return false end
+  if open then return cp == 0xFF09 end -- （一）
+  return cp == 0x3001 -- 一、
+end
+
+-- A row that is nothing but a fence: ``` / ~~~ (with an optional
+-- language) or the ''' / """ that people put around quoted text.
+local function isFenceLine(line)
+  return line:match("^```[%w_+%-]*%s*$") or line:match("^~~~[%w_+%-]*%s*$")
+    or line:match("^'''%s*$") or line:match('^"""%s*$')
+end
+
+-- typed: the row was typed by the user (a prompt), so every numbered
+-- form counts as a list head, not only markdown's "1. ".
+local function isStructuralLine(line, typed)
   return line:match("^[%-%*%+] ")
     or line:match("^%d+%.%s")
+    or (typed and isNumberedItemLine(line))
+    or isFenceLine(line)
     or line:match("^%d+%s+[+%-]%s")
     or isLineNumberPrefixed(line)
     or line:match("^#+%s")
@@ -346,11 +397,12 @@ local QUOTE_BAR = "▎"
 local function parseClaudeLine(rawLine)
   local line = rawLine:gsub("%s+$", "")
 
-  local hadMarker = false
+  local hadMarker, promptEcho = false, false
   for _, m in ipairs(contentMarkers) do
     if line:sub(1, #m) == m then
       line = line:sub(#m + 1)
       hadMarker = true
+      promptEcho = m == "❯ " or m == "› "
       break
     end
   end
@@ -389,6 +441,7 @@ local function parseClaudeLine(rawLine)
     hasMargin = hasMargin,
     hadPipe = hadPipe or hadToolMarker,
     hadMarker = hadMarker,
+    promptEcho = promptEcho,
     quoteDepth = quoteDepth,
     chrome = nonEmpty and isChromeLine(line) or false,
     width = displayWidth(line),
@@ -846,15 +899,36 @@ local function dedentCodeBlocks(lines)
   end
 end
 
+local function isProseRow(parsed)
+  return parsed.nonEmpty and not parsed.chrome and not parsed.indented
+    and not parsed.codeLike and not parsed.tableLike
+end
+
 local function inferWrapWidth(lines)
   local maxWidth = 0
   for _, parsed in ipairs(lines) do
-    if parsed.nonEmpty and not parsed.chrome and not parsed.indented
-      and not parsed.codeLike and not parsed.tableLike then
-      if parsed.width > maxWidth then maxWidth = parsed.width end
-    end
+    if isProseRow(parsed) and parsed.width > maxWidth then maxWidth = parsed.width end
   end
   return maxWidth
+end
+
+-- Rows of the user's own prompt: from a "❯ " / "› " echo until the
+-- next response marker or chrome row. Each prompt counts its rows that
+-- reach the wrap width: with fewer than two, the width may be nothing
+-- but the length of its own longest typed line.
+local function markPromptRows(lines, wrapWidth)
+  local prompt = nil
+  for _, l in ipairs(lines) do
+    if l.promptEcho then
+      prompt = { fullRows = 0 }
+    elseif l.hadMarker or l.chrome then
+      prompt = nil
+    end
+    l.prompt = prompt
+    if prompt and isProseRow(l) and l.width >= wrapWidth - config.wrapJoinSlack then
+      prompt.fullRows = prompt.fullRows + 1
+    end
+  end
 end
 
 -- Whole-line selections always capture whatever indent is left of
@@ -888,6 +962,7 @@ local function cleanClaudeTUI(text)
 
   dedentCodeBlocks(lines)
   local wrapWidth = inferWrapWidth(lines)
+  markPromptRows(lines, wrapWidth)
 
   -- Partial copy: first non-empty line lacks margin (selection started mid-line).
   -- Its apparent length is shorter than the wrap width, so skip the
@@ -925,8 +1000,15 @@ local function cleanClaudeTUI(text)
       local lastLineWidth = cur.width
       local lastLineText = cur.text
       local skipWidthCheck = atFirstLine and firstLinePartial
+      -- A prompt's line breaks are typed. Its rows count as wrapped only
+      -- when a second row reaches the wrap width too, so the width is
+      -- the terminal's and not merely the longest line's.
+      local typed = cur.prompt ~= nil
+      local widthKnown = wrapWidth >= config.wrapMinInferredWidth
+        and not (typed and cur.prompt.fullRows < 2)
       while i + 1 <= #lines do
         local nxt = lines[i + 1]
+        if isFenceLine(lastLineText) then break end
         if not nxt.nonEmpty then break end
         if nxt.chrome then break end
         if nxt.indented then break end
@@ -934,9 +1016,9 @@ local function cleanClaudeTUI(text)
         if nxt.tableLike then break end
         -- Quote rows only continue a quote paragraph of the same depth.
         if nxt.quoteDepth ~= cur.quoteDepth then break end
-        if isStructuralLine(nxt.text) then break end
+        if isStructuralLine(nxt.text, nxt.prompt ~= nil) then break end
         if not skipWidthCheck
-          and wrapWidth >= config.wrapMinInferredWidth
+          and widthKnown
           and lastLineWidth < wrapWidth - config.wrapJoinSlack then
           -- Rescue: the TUI wraps greedily at spaces, so a long next
           -- "word" (e.g. an unbroken CJK run after "3. API") explains
@@ -947,12 +1029,13 @@ local function cleanClaudeTUI(text)
             break
           end
         end
-        -- Narrow content (no reliable wrap width): a line ending in
-        -- sentence-final punctuation is a complete sentence, not a
-        -- wrap point. Common for short CJK list-like rows.
-        if not skipWidthCheck
-          and wrapWidth < config.wrapMinInferredWidth
-          and endsWithSentencePunct(lastLineText) then
+        -- No reliable wrap width. A prompt (narrow, or its longest row
+        -- reached by no other row) shows no sign of wrapping, so its rows
+        -- stay as typed. Elsewhere — narrow panes — a line ending in
+        -- sentence-final punctuation is a complete sentence, not a wrap
+        -- point. Common for short CJK list-like rows.
+        if not skipWidthCheck and not widthKnown
+          and (typed or endsWithSentencePunct(lastLineText)) then
           break
         end
         skipWidthCheck = false
@@ -1592,9 +1675,15 @@ end
 
 -- The pipeline claude-copy.lua runs on every terminal copy. Returns the
 -- text unchanged when there is nothing to clean.
-local function processClipboard(text)
+-- opts.appCopy: Claude Code copied the text itself (fullscreen TUI).
+-- It has already rejoined its soft wraps, so every line break left in
+-- the text was typed: strip margins, never reflow.
+local function processClipboard(text, opts)
   local normalized = recoverFlattenedNumberedBlock(text)
   local decision = classifyClaudeClipboard(normalized)
+  if type(opts) == "table" and opts.appCopy and decision.mode == "full" then
+    decision.mode = "strip"
+  end
   -- Same gate as before: text the scorer would not touch (code, plain
   -- text) stays byte-for-byte — apart from leading ▎ quote bars, which
   -- are never content, and whole Claude Code tables (see isClaudeTable).

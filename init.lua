@@ -5,7 +5,7 @@
 -- Intercepts Cmd+C in terminal apps, performs the real copy,
 -- then conditionally cleans Claude TUI artifacts in the copied text.
 
-local VERSION = "2026-10-27b"
+local VERSION = "2026-10-29"
 
 local scriptDir = debug.getinfo(1, "S").source:match("@(.*/)")
 local clean = dofile(scriptDir .. "clean.lua")
@@ -41,6 +41,19 @@ local config = {
   -- has switched to the app they paste into. Clipboard writes landing
   -- this soon after a terminal ⌘C still count as terminal copies.
   lateCopyWindowMs = 1500,
+  -- A ⌘C repeating the copy Claude Code made on select within this
+  -- long is the same copy again.
+  appCopyRepeatMs = 30000,
+}
+
+-- Terminals whose own copy-on-select can write the system clipboard
+-- (iTerm2 does by default). A clipboard write in front of them with no
+-- ⌘C may be the terminal's native copy, soft wraps included as hard
+-- line breaks, so it still gets the full clean.
+local nativeCopyOnSelectApps = {
+  ["iTerm2"] = true,
+  ["WezTerm"] = true,
+  ["Warp"] = true,
 }
 
 -- ═══════════════════════════════════════════════════════════════
@@ -59,6 +72,23 @@ local lateCopyDeadline = 0
 
 local function isTerminalCopy()
   return isTerminalFocused() or hs.timer.absoluteTime() < lateCopyDeadline
+end
+
+-- Claude Code's own copies (fullscreen TUI) come with their soft wraps
+-- already rejoined, so clean.process must not reflow them. Copy-on-select
+-- writes are theirs unless the terminal may copy on select itself; the
+-- raw text is kept so the ⌘C repeating it is recognised too.
+local lastAppCopy = { text = nil, at = 0 }
+local ownWrite = nil
+
+local function isNativeCopyOnSelectFront()
+  local app = hs.application.frontmostApplication()
+  return app ~= nil and nativeCopyOnSelectApps[app:name()] == true
+end
+
+local function repeatsAppCopy(content)
+  return content ~= nil and content == lastAppCopy.text
+    and hs.timer.absoluteTime() - lastAppCopy.at < config.appCopyRepeatMs * 1000000
 end
 
 local copyInterceptor
@@ -103,7 +133,7 @@ local function isPlainCmdC(event)
     and not flags.fn
 end
 
-local function cleanClipboard(content)
+local function cleanClipboard(content, appCopy)
   if type(content) ~= "string" then return end
   -- Claude TUI copies are conversation-sized; anything huge is a file
   -- dump. Skip cleaning rather than stall Hammerspoon's main thread.
@@ -111,7 +141,7 @@ local function cleanClipboard(content)
   local countAfterCopy = hs.pasteboard.changeCount()
   -- Box-drawn tables become CSV; everything else goes through the
   -- classify → clean / stripOnly path exactly as before.
-  local cleaned = clean.process(content)
+  local cleaned = clean.process(content, { appCopy = appCopy })
 
   -- Never wipe the clipboard with an empty result (e.g. content that
   -- turned out to be pure TUI chrome).
@@ -121,11 +151,13 @@ local function cleanClipboard(content)
   -- (clipboard managers, a second copy), don't clobber it.
   if hs.pasteboard.changeCount() ~= countAfterCopy then return end
 
+  ownWrite = cleaned
   hs.pasteboard.setContents(cleaned)
 end
 
 local function handleTerminalCopy()
-  cleanClipboard(readClipboardAfterCopy())
+  local content = readClipboardAfterCopy()
+  cleanClipboard(content, repeatsAppCopy(content))
 end
 
 copyInterceptor = hs.eventtap.new({ hs.eventtap.event.types.keyDown }, function(event)
@@ -158,13 +190,17 @@ copyInterceptor:start()
 -- ~0.5s later, so the interceptor above comes back empty and the raw
 -- text lands over the cleaned one — see config.lateCopyWindowMs.
 -- Clean any clipboard write that lands while a terminal is in front
--- or in that window. Our own setContents comes back through here as
--- well; process() is a no-op on text it already cleaned, so nothing
--- is written twice. A global, not a local: an unreferenced watcher
--- gets garbage collected and silently stops.
+-- or in that window, as Claude Code's own copy (no reflow) unless the
+-- terminal in front may copy on select itself. Our own setContents
+-- comes back through here as well and is skipped, so it is never taken
+-- for Claude Code's copy. A global, not a local: an unreferenced
+-- watcher gets garbage collected and silently stops.
 ClaudeCopyPasteboardWatcher = hs.pasteboard.watcher.new(function(content)
   if copyInProgress or not isTerminalCopy() then return end
-  local ok, err = pcall(cleanClipboard, content)
+  if content == ownWrite then return end
+  local appCopy = not isNativeCopyOnSelectFront()
+  if appCopy then lastAppCopy = { text = content, at = hs.timer.absoluteTime() } end
+  local ok, err = pcall(cleanClipboard, content, appCopy)
   if not ok then
     hs.printf("claude-copy: copy-on-select cleaner failed: %s", tostring(err))
   end
